@@ -2,7 +2,7 @@
 
 A free, cross-platform desktop database manager written in Go with
 [go-gui](https://github.com/go-gui-org/go-gui). Use it to connect to a database, explore its tables,
-run SQL and (soon) edit data safely.
+run SQL and edit data safely.
 
 - **Engines**: SQLite, PostgreSQL and MySQL / MariaDB.
 - **Platforms**: Linux (X11/Wayland), Windows and macOS.
@@ -23,10 +23,23 @@ run SQL and (soon) edit data safely.
   the server is listed and each one expands to show its tables.
 - **Sidebar** with tables and views per connection, with a text filter.
 - **Tabs per table**:
-  - **Structure**: columns with type, nullable and PK/autoincrement.
+  - **Structure**: columns with type, nullable, PK/autoincrement and foreign keys (`FK → table.column`).
   - **Data**: paginated grid (keyset or `OFFSET`), page size from 20 to 500 rows, on-demand `COUNT(*)`,
-    dimmed `NULL` and summarized BLOBs.
+    a `#` column numbering the rows, dimmed `NULL` and summarized BLOBs.
   - **SQL**: editor with syntax highlighting that runs against the table's database.
+- **Foreign key navigation**: cells of a foreign key column have a link button that opens the referenced
+  table filtered to that row; a back button returns to the previous table where you left it.
+- **Data editing** in the Data tab:
+  - Click a cell to edit it; Ctrl/Cmd+click and Shift+click select several rows.
+  - Dates and times are picked with a calendar and a time field, never typed by hand.
+  - Bar below the grid: **Save (N)**, **Cancel** | **Add**, **Delete** | **Set NULL**, **Set Now**
+    (Delete, Set NULL and Set Now work on every selected row).
+  - Changes stay pending (highlighted, new rows marked `+`, deleted rows struck through) until you save.
+    Saving shows the SQL first and runs everything in **one transaction**: if anything fails, nothing is
+    saved and the error says which change failed.
+  - Every `UPDATE`/`DELETE` must affect exactly one row, so tables without a primary key are safe too
+    (you are warned before editing them).
+  - Leaving the page or the table, disconnecting or closing the window with unsaved changes asks first.
 - **SQL execution**:
   - `Ctrl+Enter` runs the selection or, if there is no selection, the statement under the cursor.
   - Several statements run in order and the last result is shown.
@@ -34,14 +47,13 @@ run SQL and (soon) edit data safely.
   - Query history stored locally.
 - **Safeguards**:
   - Warning before running `UPDATE`/`DELETE` without `WHERE` or DML outside an explicit transaction.
-  - **Read-only** connections: the editor rejects write statements and the session is opened in read-only
-    mode on the engine.
+  - **Read-only** connections: the editor rejects write statements, the grid cannot be edited and the
+    session is opened in read-only mode on the engine.
 - **Light and dark theme**, persisted across sessions.
 
 ### Coming up
 
 - Autocompletion of keywords, tables and columns; history panel with search.
-- Data editing in the grid with pending changes, SQL preview and saving in a single transaction.
 - Export to CSV and JSON.
 - Binaries on GitHub Releases and packages for AUR, Homebrew and winget.
 
@@ -95,16 +107,30 @@ export ANVIL_TEST_MYSQL="localhost 3306 user password database"
 go test ./...
 ```
 
+With Docker, throwaway servers are enough:
+
+```sh
+docker run -d --rm --name anvil-pg -e POSTGRES_PASSWORD=anvil -p 127.0.0.1:55432:5432 postgres:18-alpine
+docker run -d --rm --name anvil-my -e MYSQL_ROOT_PASSWORD=anvil -e MYSQL_DATABASE=anvil -p 127.0.0.1:53306:3306 mysql:8.4
+ANVIL_TEST_PG="127.0.0.1 55432 postgres anvil postgres" \
+ANVIL_TEST_MYSQL="127.0.0.1 53306 root anvil anvil" go test -count=1 ./...
+docker rm -f anvil-pg anvil-my
+```
+
+UI tests run headless. `ANVIL_SCREENSHOTS=<dir> go test ./ui/` also saves PNG screenshots of the tested
+screens.
+
 ## Project layout
 
 ```
 main.go
-ui/                   go-gui views (layout, sidebar, tabs, grid, SQL editor)
+ui/                   go-gui views (layout, sidebar, tabs, grid and its editing, SQL editor)
 ui/components/        reusable components
 internal/connections  connection CRUD + keyring
 internal/drivers      per-engine abstraction: connection, dialect, metadata, SQL split and analysis
 internal/session      open connections (one pool per database)
-internal/query        execution, pagination and cancellation
+internal/query        execution, pagination (with the FK filter) and cancellation
+internal/editing      pending changes, validation, DML and the save transaction
 internal/history      query history
 internal/settings     local preferences
 internal/storage      opening and migrating the local database

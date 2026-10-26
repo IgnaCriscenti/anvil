@@ -18,6 +18,34 @@ type TableSource struct {
 	DB      *sql.DB
 	Table   drivers.Table
 	Columns []drivers.Column
+	// Filter keeps only the rows where every column equals its value
+	// (following a foreign key).
+	Filter []Cond
+}
+
+// Cond is a Column = Value condition.
+type Cond struct {
+	Column string
+	Value  any
+}
+
+// where builds the WHERE clause with the filter plus extra (a condition
+// on the placeholder that follows the filter's ones, or ""). It returns the
+// clause and the filter's arguments.
+func (s TableSource) where(extra string) (string, []any) {
+	var parts []string
+	var args []any
+	for _, c := range s.Filter {
+		args = append(args, c.Value)
+		parts = append(parts, s.Driver.QuoteIdent(c.Column)+" = "+s.Driver.Placeholder(len(args)))
+	}
+	if extra != "" {
+		parts = append(parts, extra)
+	}
+	if len(parts) == 0 {
+		return "", nil
+	}
+	return " WHERE " + strings.Join(parts, " AND "), args
 }
 
 // keyColumn returns the single-column PK for keyset pagination (SPEC §6.2),
@@ -91,6 +119,7 @@ func loadTablePage(ctx context.Context, src TableSource, cur Page, dir Dir, size
 		dir = First
 	}
 
+	n := len(src.Filter) // placeholders taken by the filter
 	key := src.keyColumn()
 	if key == nil {
 		index := 0
@@ -102,8 +131,9 @@ func loadTablePage(ctx context.Context, src TableSource, cur Page, dir Dir, size
 		case Reload:
 			index = cur.Index
 		}
-		q := "SELECT * FROM " + table + src.orderBy() + " LIMIT " + ph(1) + " OFFSET " + ph(2)
-		rows, err := src.DB.QueryContext(ctx, q, size+1, index*size)
+		where, args := src.where("")
+		q := "SELECT * FROM " + table + where + src.orderBy() + " LIMIT " + ph(n+1) + " OFFSET " + ph(n+2)
+		rows, err := src.DB.QueryContext(ctx, q, append(args, size+1, index*size)...)
 		if err != nil {
 			return Page{}, err
 		}
@@ -122,17 +152,21 @@ func loadTablePage(ctx context.Context, src TableSource, cur Page, dir Dir, size
 	)
 	switch dir {
 	case First:
-		q = "SELECT * FROM " + table + " ORDER BY " + k + " LIMIT " + ph(1)
-		args = []any{size + 1}
+		where, filter := src.where("")
+		q = "SELECT * FROM " + table + where + " ORDER BY " + k + " LIMIT " + ph(n+1)
+		args = append(filter, size+1)
 	case Next:
-		q = "SELECT * FROM " + table + " WHERE " + k + " > " + ph(1) + " ORDER BY " + k + " LIMIT " + ph(2)
-		args, index = []any{cur.last, size + 1}, cur.Index+1
+		where, filter := src.where(k + " > " + ph(n+1))
+		q = "SELECT * FROM " + table + where + " ORDER BY " + k + " LIMIT " + ph(n+2)
+		args, index = append(filter, cur.last, size+1), cur.Index+1
 	case Reload:
-		q = "SELECT * FROM " + table + " WHERE " + k + " >= " + ph(1) + " ORDER BY " + k + " LIMIT " + ph(2)
-		args, index = []any{cur.first, size + 1}, cur.Index
+		where, filter := src.where(k + " >= " + ph(n+1))
+		q = "SELECT * FROM " + table + where + " ORDER BY " + k + " LIMIT " + ph(n+2)
+		args, index = append(filter, cur.first, size+1), cur.Index
 	case Prev:
-		q = "SELECT * FROM " + table + " WHERE " + k + " < " + ph(1) + " ORDER BY " + k + " DESC LIMIT " + ph(2)
-		args, index = []any{cur.first, size}, cur.Index-1
+		where, filter := src.where(k + " < " + ph(n+1))
+		q = "SELECT * FROM " + table + where + " ORDER BY " + k + " DESC LIMIT " + ph(n+2)
+		args, index = append(filter, cur.first, size), cur.Index-1
 	}
 
 	rows, err := src.DB.QueryContext(ctx, q, args...)
@@ -159,7 +193,8 @@ func loadTablePage(ctx context.Context, src TableSource, cur Page, dir Dir, size
 // Count counts the table's rows (on demand, SPEC §6.2).
 func Count(ctx context.Context, src TableSource) (int64, error) {
 	var n int64
-	err := src.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+drivers.QualifiedName(src.Driver, src.Table)).Scan(&n)
+	where, args := src.where("")
+	err := src.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+drivers.QualifiedName(src.Driver, src.Table)+where, args...).Scan(&n)
 	if err != nil {
 		return 0, engineError("Failed to count rows.", err)
 	}

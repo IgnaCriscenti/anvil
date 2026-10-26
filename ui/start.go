@@ -36,6 +36,8 @@ func Start() {
 		Title:  "Anvil",
 		Width:  1200,
 		Height: 760,
+		// Asks before losing unsaved grid changes (SPEC §7.2).
+		OnCloseRequest: confirmClose,
 		OnInit: func(w *gui.Window) {
 			w.SetView(mainView)
 			reloadConnections(w)

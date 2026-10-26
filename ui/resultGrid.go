@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/Watts-Argentina/anvil/internal/query"
+	"github.com/Watts-Argentina/anvil/ui/components"
 	"github.com/go-gui-org/go-gui/gui"
 )
 
@@ -28,42 +29,62 @@ func cellText(s string) string {
 	return s
 }
 
-// resultGrid shows a read-only result. NULL is dimmed and distinct
-// from "" (SPEC §6.4).
+// cellStyles are the text styles of the grid cells.
+type cellStyles struct {
+	null, blob gui.TextStyle
+}
+
+func newCellStyles(t gui.Theme) cellStyles {
+	null := t.TextStyleDisabled
+	null.Typeface = t.TextStyleCaption.Typeface
+	return cellStyles{null: null, blob: t.TextStyleSecondary}
+}
+
+// valueCell shows a read-only value. NULL is dimmed and distinct from ""
+// (SPEC §6.4).
+func (st *cellStyles) valueCell(v query.Value) gui.TableCellCfg {
+	switch {
+	case v.Null:
+		return gui.TableCellCfg{Value: "NULL", TextStyle: &st.null}
+	case v.Blob:
+		return gui.TableCellCfg{Value: v.Text, TextStyle: &st.blob}
+	}
+	return gui.TableCellCfg{Value: cellText(v.Text)}
+}
+
+// headRow is the header row of a result.
+func headRow(res query.Result) gui.TableRowCfg {
+	head := make([]gui.TableCellCfg, len(res.Columns))
+	for i, c := range res.Columns {
+		head[i] = gui.TableCellCfg{Value: c.Name, HeadCell: true}
+	}
+	return gui.TableRowCfg{Cells: head}
+}
+
+// resultGrid shows a read-only result (SQL editor).
 func resultGrid(id string, res query.Result, size *boxSize) gui.View {
 	t := gui.CurrentTheme()
 	if len(res.Columns) == 0 {
 		return gui.Text(gui.TextCfg{Text: "No columns.", TextStyle: t.TextStyleSecondary})
 	}
-
-	nullStyle := t.TextStyleDisabled
-	nullStyle.Typeface = t.TextStyleCaption.Typeface
-	blobStyle := t.TextStyleSecondary
-
-	head := make([]gui.TableCellCfg, len(res.Columns))
-	for i, c := range res.Columns {
-		head[i] = gui.TableCellCfg{Value: c.Name, HeadCell: true}
-	}
+	st := newCellStyles(t)
 	rows := make([]gui.TableRowCfg, 0, len(res.Rows)+1)
-	rows = append(rows, gui.TableRowCfg{Cells: head})
+	rows = append(rows, headRow(res))
 	for _, r := range res.Rows {
 		cells := make([]gui.TableCellCfg, len(r))
 		for i, v := range r {
-			switch {
-			case v.Null:
-				cells[i] = gui.TableCellCfg{Value: "NULL", TextStyle: &nullStyle}
-			case v.Blob:
-				cells[i] = gui.TableCellCfg{Value: v.Text, TextStyle: &blobStyle}
-			default:
-				cells[i] = gui.TableCellCfg{Value: cellText(v.Text)}
-			}
+			cells[i] = st.valueCell(v)
 		}
 		rows = append(rows, gui.TableRowCfg{Cells: cells})
 	}
+	return gridTable(id, rows, size)
+}
 
-	// The panel height (measured in the previous frame) bounds the table:
-	// that way it virtualizes the rows and scrolls inside the panel. MinWidth is
-	// the measured natural width (see measuredBox).
+// gridTable is the table of a grid. The panel height (measured in the
+// previous frame) bounds it: that way it virtualizes the rows and scrolls
+// inside the panel. MinWidth is the measured natural width (see
+// measuredBox).
+func gridTable(id string, rows []gui.TableRowCfg, size *boxSize) gui.View {
 	return measuredBox(id, size, false, gui.Table(gridStyle(gui.TableCfg{
 		ID:           gui.ScopeID(id, "table"),
 		Data:         rows,
@@ -72,6 +93,48 @@ func resultGrid(id string, res query.Result, size *boxSize) gui.View {
 		Height:       size.H,
 		MinWidth:     size.ContentW,
 	})))
+}
+
+// cellIconSize is the size of the icons of the buttons inside cells.
+const cellIconSize = 12
+
+// buttonRoom is appended to Value when a cell also has a button: the table
+// sizes columns by measuring Value, not Content.
+const buttonRoom = "\u2003\u2003"
+
+// cellButton is a small icon-only button for a grid cell. It does not take
+// focus, so the cell being edited keeps it.
+func cellButton(id, icon, label string, color gui.Color, onClick func(*gui.Window)) gui.View {
+	return gui.Button(gui.ButtonCfg{
+		ID:            id,
+		Variant:       gui.ButtonGhost,
+		Padding:       gui.PadAll(1),
+		SizeBorder:    gui.NoBorder,
+		FocusDisabled: true,
+		A11YCfg:       gui.A11YCfg{A11YLabel: label},
+		Content:       []gui.View{components.IconColor(icon, cellIconSize, color)},
+		OnClick: func(ctx gui.EventCtx) {
+			onClick(ctx.Window)
+			ctx.Consume()
+		},
+	})
+}
+
+// withButton shows the cell's text followed by a button.
+func withButton(cell gui.TableCellCfg, button gui.View) gui.TableCellCfg {
+	text := gui.TextCfg{Text: cell.Value}
+	if cell.TextStyle != nil {
+		text.TextStyle = *cell.TextStyle
+	}
+	cell.Value += buttonRoom
+	cell.Content = gui.Row(gui.ContainerCfg{
+		Padding:    gui.NoPadding,
+		Spacing:    gui.SpacingSmall,
+		SizeBorder: gui.NoBorder,
+		VAlign:     gui.VAlignMiddle,
+		Content:    []gui.View{gui.Text(text), button},
+	})
+	return cell
 }
 
 // naturalWidth is the content width of an unstretched table: that of its

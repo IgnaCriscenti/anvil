@@ -4,15 +4,17 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
+	"github.com/Watts-Argentina/anvil/internal/editing"
 	"github.com/Watts-Argentina/anvil/internal/query"
 	"github.com/Watts-Argentina/anvil/models"
 	"github.com/Watts-Argentina/anvil/ui/components"
 	"github.com/go-gui-org/go-gui/gui"
 )
 
-// dataState is a table's Data tab: a read-only paginated grid (editing
-// comes with SPEC §7).
+// dataState is a table's Data tab: a paginated grid with pending
+// changes (SPEC §6, §7).
 type dataState struct {
 	Page     query.Page
 	Size     int
@@ -22,6 +24,16 @@ type dataState struct {
 	Counting bool
 	fetched  bool
 	gridSize boxSize
+
+	// Pending changes refer to the rows of Page: changing page asks to save
+	// or discard them first.
+	Pending editing.Pending
+	Edit    cellEdit
+	Sel     selection
+	Date    dateEdit
+	NoPKOK  bool // the no-PK warning was accepted
+	Saving  bool
+	SaveErr string
 }
 
 func (d dataState) loaded() bool { return d.fetched || d.Loading }
@@ -42,7 +54,7 @@ func tableSource(ctx context.Context, a *App, tv *tableView) (query.TableSource,
 	if err != nil {
 		return query.TableSource{}, err
 	}
-	return query.TableSource{Driver: s.Driver, DB: db, Table: tv.Table, Columns: tv.Columns}, nil
+	return query.TableSource{Driver: s.Driver, DB: db, Table: tv.Table, Columns: tv.Columns, Filter: tv.Filter}, nil
 }
 
 func loadData(w *gui.Window, tv *tableView, dir query.Dir) {
@@ -66,6 +78,8 @@ func loadData(w *gui.Window, tv *tableView, dir query.Dir) {
 			return
 		}
 		tv.Data.Page = p
+		// Pending changes refer to the rows of the old page.
+		discardChanges(tv)
 	})
 }
 
@@ -118,6 +132,10 @@ func dataTab(w *gui.Window, a *App, tv *tableView) gui.View {
 		countView = gui.Text(gui.TextCfg{Text: d.Count, TextStyle: t.TextStyleSecondary})
 	}
 
+	if f := filterText(tv.Filter); f != "" {
+		status = strings.TrimSuffix(f+" · "+status, " · ")
+	}
+
 	toolbar := gui.Row(gui.ContainerCfg{
 		Sizing:     gui.FillFit,
 		Padding:    gui.PadVH(4, 4),
@@ -130,9 +148,11 @@ func dataTab(w *gui.Window, a *App, tv *tableView) gui.View {
 				A11YCfg:  gui.A11YCfg{A11YLabel: "Refresh"},
 				Disabled: d.Loading,
 				OnClick: func(ctx gui.EventCtx) {
-					tv.Data.Count = ""
-					loadData(ctx.Window, tv, query.Reload)
 					ctx.Consume()
+					leaveTable(ctx.Window, tv, false, func(w *gui.Window) {
+						tv.Data.Count = ""
+						loadData(w, tv, query.Reload)
+					})
 				},
 			}),
 			components.IconButton("chevronLeft", "", gui.ButtonCfg{
@@ -140,8 +160,8 @@ func dataTab(w *gui.Window, a *App, tv *tableView) gui.View {
 				A11YCfg:  gui.A11YCfg{A11YLabel: "Previous page"},
 				Disabled: d.Loading || d.Page.Index == 0,
 				OnClick: func(ctx gui.EventCtx) {
-					loadData(ctx.Window, tv, query.Prev)
 					ctx.Consume()
+					leaveTable(ctx.Window, tv, false, func(w *gui.Window) { loadData(w, tv, query.Prev) })
 				},
 			}),
 			gui.Text(gui.TextCfg{Text: "Page " + itoa(d.Page.Index+1), TextStyle: t.TextStyleBodySmall}),
@@ -150,8 +170,8 @@ func dataTab(w *gui.Window, a *App, tv *tableView) gui.View {
 				A11YCfg:  gui.A11YCfg{A11YLabel: "Next page"},
 				Disabled: d.Loading || !d.Page.HasNext,
 				OnClick: func(ctx gui.EventCtx) {
-					loadData(ctx.Window, tv, query.Next)
 					ctx.Consume()
+					leaveTable(ctx.Window, tv, false, func(w *gui.Window) { loadData(w, tv, query.Next) })
 				},
 			}),
 			gui.Select(gui.SelectCfg{
@@ -159,11 +179,15 @@ func dataTab(w *gui.Window, a *App, tv *tableView) gui.View {
 				Items:    pageSizes,
 				Selected: []string{itoa(d.Size)},
 				OnSelect: func(sel []string, ctx gui.EventCtx) {
-					if n, err := strconv.Atoi(sel[0]); err == nil && n != tv.Data.Size {
-						tv.Data.Size = min(max(n, models.MinPageSize), models.MaxPageSize)
-						loadData(ctx.Window, tv, query.First)
-					}
 					ctx.Consume()
+					n, err := strconv.Atoi(sel[0])
+					if err != nil || n == tv.Data.Size {
+						return
+					}
+					leaveTable(ctx.Window, tv, false, func(w *gui.Window) {
+						tv.Data.Size = min(max(n, models.MinPageSize), models.MaxPageSize)
+						loadData(w, tv, query.First)
+					})
 				},
 			}),
 			gui.Text(gui.TextCfg{Text: "rows per page", TextStyle: t.TextStyleCaption}),
@@ -180,7 +204,12 @@ func dataTab(w *gui.Window, a *App, tv *tableView) gui.View {
 	case !d.fetched:
 		body = gui.Text(gui.TextCfg{Text: "Loading rows…", TextStyle: t.TextStyleSecondary})
 	default:
-		body = resultGrid("data-grid", d.Page.Result, &tv.Data.gridSize)
+		body = dataGrid(a, tv)
+	}
+
+	content := []gui.View{toolbar, body}
+	if tv.editable(a) && d.fetched && d.Err == "" {
+		content = append(content, editBar(tv))
 	}
 
 	return gui.Column(gui.ContainerCfg{
@@ -189,6 +218,141 @@ func dataTab(w *gui.Window, a *App, tv *tableView) gui.View {
 		Padding:    gui.NoPadding,
 		Spacing:    gui.SpacingSmall,
 		SizeBorder: gui.NoBorder,
-		Content:    []gui.View{toolbar, body},
+		Content:    content,
 	})
+}
+
+// editBar is the bottom bar with the editing actions (SPEC §7.5):
+// Save, Cancel | Add, Delete | Set NULL, Set Now. Delete acts on the
+// selected rows; Set NULL and Set Now on the active column of each of them.
+func editBar(tv *tableView) gui.View {
+	t := gui.CurrentTheme()
+	d := &tv.Data
+	n := d.Pending.Len()
+	selected := len(tv.selectedRows())
+
+	deleteLabel := "Delete"
+	if tv.allDeleted() {
+		deleteLabel = "Restore"
+	}
+	if selected > 1 {
+		deleteLabel += fmt.Sprintf(" (%d)", selected)
+	}
+	var notes []string
+	if selected > 1 {
+		notes = append(notes, itoa(selected)+" selected")
+	}
+	switch {
+	case n > 0:
+		notes = append(notes, pendingSummary(&d.Pending))
+	case !tv.hasPK():
+		notes = append(notes, "No primary key: rows matched by all values")
+	case selected <= 1:
+		notes = append(notes, "Ctrl/Shift+click selects rows")
+	}
+	hint := strings.Join(notes, " · ")
+
+	return gui.Row(gui.ContainerCfg{
+		ID:         "data-edit-bar",
+		Sizing:     gui.FillFit,
+		Padding:    gui.PadVH(4, 4),
+		Spacing:    gui.SpacingSmall,
+		SizeBorder: gui.NoBorder,
+		VAlign:     gui.VAlignMiddle,
+		Content: []gui.View{
+			components.IconButton("save", fmt.Sprintf("Save (%d)", n), gui.ButtonCfg{
+				ID:       "data-save",
+				Variant:  gui.ButtonPrimary,
+				Disabled: n == 0 && !d.Edit.Active || d.Saving,
+				OnClick: func(ctx gui.EventCtx) {
+					reviewSave(ctx.Window, tv, nil)
+					ctx.Consume()
+				},
+			}),
+			components.IconButton("undo", "Cancel", gui.ButtonCfg{
+				ID:       "data-discard",
+				A11YCfg:  gui.A11YCfg{A11YDescription: "Discard every pending change"},
+				Disabled: n == 0 && !d.Edit.Active,
+				OnClick: func(ctx gui.EventCtx) {
+					discardChanges(tv)
+					ctx.Consume()
+				},
+			}),
+			barSeparator(),
+			components.IconButton("plus", "Add", gui.ButtonCfg{
+				ID:      "data-add-row",
+				Variant: gui.ButtonGhost,
+				A11YCfg: gui.A11YCfg{A11YDescription: "Add a row"},
+				OnClick: func(ctx gui.EventCtx) {
+					addRow(ctx.Window, tv)
+					ctx.Consume()
+				},
+			}),
+			components.IconButton("trash", deleteLabel, gui.ButtonCfg{
+				ID:            "data-delete",
+				Variant:       gui.ButtonGhost,
+				A11YCfg:       gui.A11YCfg{A11YDescription: deleteLabel + " the selected rows"},
+				FocusDisabled: true,
+				Disabled:      selected == 0,
+				OnClick: func(ctx gui.EventCtx) {
+					deleteSelected(ctx.Window, tv)
+					ctx.Consume()
+				},
+			}),
+			barSeparator(),
+			gui.Button(gui.ButtonCfg{
+				ID:            "data-set-null",
+				Label:         "Set NULL",
+				Variant:       gui.ButtonGhost,
+				FocusDisabled: true, // the cell being edited keeps the focus
+				Disabled:      !tv.canSetNull(),
+				OnClick: func(ctx gui.EventCtx) {
+					setNull(ctx.Window, tv)
+					ctx.Consume()
+				},
+			}),
+			gui.Button(gui.ButtonCfg{
+				ID:            "data-set-now",
+				Label:         "Set Now",
+				Variant:       gui.ButtonGhost,
+				FocusDisabled: true,
+				Disabled:      !tv.canSetNow(),
+				OnClick: func(ctx gui.EventCtx) {
+					setNow(ctx.Window, tv)
+					ctx.Consume()
+				},
+			}),
+			// The notes take the space left and are clipped, so they never
+			// widen the panel.
+			gui.Row(gui.ContainerCfg{
+				Sizing:     gui.FillFit,
+				Padding:    gui.NoPadding,
+				SizeBorder: gui.NoBorder,
+				HAlign:     gui.HAlignEnd,
+				Clip:       true,
+				Content:    []gui.View{gui.Text(gui.TextCfg{Text: hint, TextStyle: t.TextStyleCaption})},
+			}),
+		},
+	})
+}
+
+// barSeparator is a vertical line between groups of buttons.
+func barSeparator() gui.View {
+	return gui.Column(gui.ContainerCfg{
+		Width:      1,
+		Height:     20,
+		Sizing:     gui.FixedFixed,
+		Padding:    gui.NoPadding,
+		SizeBorder: gui.NoBorder,
+		Color:      gui.CurrentTheme().ColorBorder,
+	})
+}
+
+// filterText describes the foreign key filter ("customer_id = 1").
+func filterText(filter []query.Cond) string {
+	parts := make([]string, len(filter))
+	for i, c := range filter {
+		parts[i] = c.Column + " = " + query.Text(c.Value)
+	}
+	return strings.Join(parts, ", ")
 }

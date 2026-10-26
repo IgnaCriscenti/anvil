@@ -148,6 +148,25 @@ func (Postgres) Columns(ctx context.Context, db *sql.DB, t Table) ([]Column, err
 	return cols, rows.Err()
 }
 
+func (Postgres) ForeignKeys(ctx context.Context, db *sql.DB, t Table) ([]ForeignKey, error) {
+	schema := t.Schema
+	if schema == "" {
+		schema = "public"
+	}
+	return scanForeignKeys(db.QueryContext(ctx, `
+		SELECT con.conname, rn.nspname, rc.relname, a.attname, ra.attname
+		FROM pg_constraint con
+		JOIN pg_class c ON c.oid = con.conrelid
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		JOIN pg_class rc ON rc.oid = con.confrelid
+		JOIN pg_namespace rn ON rn.oid = rc.relnamespace
+		CROSS JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY AS k(col, ref, pos)
+		JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.col
+		JOIN pg_attribute ra ON ra.attrelid = con.confrelid AND ra.attnum = k.ref
+		WHERE con.contype = 'f' AND n.nspname = $1 AND c.relname = $2
+		ORDER BY con.conname, k.pos`, schema, t.Name))
+}
+
 func (Postgres) QuoteIdent(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
 
 func (Postgres) Placeholder(n int) string { return "$" + strconv.Itoa(n) }

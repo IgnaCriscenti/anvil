@@ -124,6 +124,32 @@ func TestTablePaging(t *testing.T) {
 	}
 }
 
+func TestTableFilter(t *testing.T) {
+	db := newDB(t)
+	ctx := context.Background()
+
+	// Keyset (items) and OFFSET (pairs) with a filter.
+	src := source(t, db, "items")
+	src.Filter = []Cond{{Column: "name", Value: "item 3"}}
+	p, err := LoadTablePage(ctx, src, Page{}, First, 10)
+	if err != nil || len(p.Rows) != 1 || p.Rows[0][0].Text != "30" {
+		t.Fatalf("items filtered = %v, %v", firstCol(p), err)
+	}
+
+	src = source(t, db, "pairs")
+	src.Filter = []Cond{{Column: "b", Value: int64(1)}}
+	if p, err = LoadTablePage(ctx, src, Page{}, First, 10); err != nil || !p.HasNext {
+		t.Fatalf("pairs first = %v, %v", firstCol(p), err)
+	}
+	if p, err = LoadTablePage(ctx, src, p, Next, 10); err != nil || firstCol(p)[0] != "11" {
+		t.Fatalf("pairs next = %v, %v", firstCol(p), err)
+	}
+	src.Filter = append(src.Filter, Cond{Column: "a", Value: int64(7)})
+	if n, err := Count(ctx, src); err != nil || n != 1 {
+		t.Fatalf("count = %d, %v", n, err)
+	}
+}
+
 func TestValues(t *testing.T) {
 	db := newDB(t)
 	p, err := LoadTablePage(context.Background(), source(t, db, "items"), Page{}, First, 1)

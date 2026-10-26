@@ -13,7 +13,9 @@ import (
 
 	"github.com/Watts-Argentina/anvil/internal/connections"
 	"github.com/Watts-Argentina/anvil/internal/drivers"
+	"github.com/Watts-Argentina/anvil/internal/editing"
 	"github.com/Watts-Argentina/anvil/internal/history"
+	"github.com/Watts-Argentina/anvil/internal/query"
 	"github.com/Watts-Argentina/anvil/internal/settings"
 	"github.com/Watts-Argentina/anvil/internal/storage"
 	"github.com/Watts-Argentina/anvil/models"
@@ -43,10 +45,11 @@ func testApp(t *testing.T) *App {
 		t.Fatal(err)
 	}
 	for _, s := range []string{
-		"create table customers (id integer primary key, name text not null, email text)",
-		"create table orders (id integer primary key, customer_id integer, total real)",
+		"create table customers (id integer primary key, name text not null, email text, created timestamp)",
+		"create table orders (id integer primary key, customer_id integer references customers (id), total real)",
 		"create view big_orders as select * from orders where total > 100",
 		"insert into customers (name, email) values ('Ana', 'ana@example.com'), ('Bruno', NULL), ('Carla', '')",
+		"update customers set created = '2024-03-01 10:20:30' where id = 1",
 		"insert into orders (customer_id, total) values (1, 50), (1, 250.5), (2, 120)",
 		"create table wide (id integer primary key, c01 text, c02 text, c03 text, c04 text, c05 text, c06 text, c07 text, c08 text, c09 text, c10 text, last_column text)",
 		"insert into wide values (1, 'alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta', 'eta', 'theta', 'iota', 'kappa', 'end')",
@@ -239,6 +242,370 @@ func TestTableTabs(t *testing.T) {
 	w.TestRender(nil)
 	checkFindings(t, w)
 	screenshot(t, w, "tab-data-light")
+}
+
+func TestFollowForeignKey(t *testing.T) {
+	a := testApp(t)
+	w := newTestWindow(t, a)
+	key := a.Table.Key
+
+	openTable(w, key, a.Tables[key][2]) // orders
+	waitFor(t, w, func() bool { return a.Table.Data.fetched })
+	orders := a.Table
+	if len(orders.FKs) != 1 || orders.FKs[0].RefTable.Name != "customers" {
+		t.Fatalf("foreign keys = %+v", orders.FKs)
+	}
+	w.TestRender(nil)
+	soft.RenderToImage(w, 1)
+	w.TestRender(nil)
+	checkFindings(t, w)
+	screenshot(t, w, "fk-orders")
+
+	// Row 2 (customer_id = 2), column 1: the link opens customer 2.
+	if err := w.TestClick(gui.ScopeIDN("data-grid", "link", 2*3+1)); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, w, func() bool { return a.Table != orders && a.Table.Data.fetched })
+	if a.Table.Table.Name != "customers" || a.Table.Back != orders {
+		t.Fatalf("opened %+v", a.Table.Table)
+	}
+	if rows := a.Table.Data.Page.Rows; len(rows) != 1 || rows[0][1].Text != "Bruno" {
+		t.Fatalf("customer rows = %v (%s)", rows, a.Table.Data.Err)
+	}
+	w.TestRender(nil)
+	checkFindings(t, w)
+	screenshot(t, w, "fk-customer")
+
+	ids := w.ResolveID("table-back")
+	if len(ids) != 1 {
+		t.Fatalf("back button ids = %v", ids)
+	}
+	if err := w.TestClick(ids[0]); err != nil {
+		t.Fatal(err)
+	}
+	if a.Table != orders {
+		t.Fatal("back did not return to orders")
+	}
+}
+
+// clickDialog clicks a button of the open dialog by its leaf ID.
+func clickDialog(t *testing.T, w *gui.Window, leaf string) {
+	t.Helper()
+	w.TestRender(nil)
+	ids := w.ResolveID(leaf)
+	if len(ids) != 1 {
+		t.Fatalf("%s ids = %v", leaf, ids)
+	}
+	if err := w.TestClick(ids[0]); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// typeCell edits a cell: opens its input, types text and presses key.
+func typeCell(t *testing.T, w *gui.Window, tv *tableView, ref cellRef, text string, key gui.KeyCode, mods gui.Modifier) {
+	t.Helper()
+	startEdit(w, tv, ref)
+	w.FrameFn() // runs the queued SetFocus
+	w.TestRender(nil)
+	if !tv.Data.Edit.Active {
+		t.Fatalf("not editing %+v", ref)
+	}
+	if text != "" {
+		if err := w.TestType(editID, text); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.TestKey(editID, key, mods); err != nil {
+		t.Fatal(err)
+	}
+	w.TestRender(nil)
+}
+
+func TestEditRows(t *testing.T) {
+	a := testApp(t)
+	w := newTestWindow(t, a)
+	key := a.Table.Key
+
+	// Views are read-only.
+	openTable(w, key, a.Tables[key][0]) // big_orders
+	waitFor(t, w, func() bool { return a.Table.Data.fetched })
+	if a.Table.editable(a) {
+		t.Fatal("a view must not be editable")
+	}
+
+	openTable(w, key, a.Tables[key][1]) // customers
+	waitFor(t, w, func() bool { return a.Table.Data.fetched })
+	tv := a.Table
+	if !tv.editable(a) {
+		t.Fatal("customers should be editable")
+	}
+	p := &tv.Data.Pending
+
+	// Enter keeps the value; Escape discards it; Ctrl+0 sets NULL.
+	typeCell(t, w, tv, cellRef{Row: 1, Column: "email"}, "b@x", gui.KeyEnter, 0)
+	if v, ok := p.Value(1, "email"); !ok || v.Null || v.Text != "b@x" || tv.Data.Edit.Active {
+		t.Fatalf("email = %+v, %v (editing %v)", v, ok, tv.Data.Edit.Active)
+	}
+	typeCell(t, w, tv, cellRef{Row: 0, Column: "name"}, "zzz", gui.KeyEscape, 0)
+	if _, ok := p.Value(0, "name"); ok {
+		t.Fatal("Escape kept the value")
+	}
+	typeCell(t, w, tv, cellRef{Row: 0, Column: "email"}, "", gui.Key0, gui.ModCtrl)
+	if v, _ := p.Value(0, "email"); !v.Null {
+		t.Fatalf("Ctrl+0: email = %+v", v)
+	}
+	// NOT NULL columns do not take NULL.
+	typeCell(t, w, tv, cellRef{Row: 2, Column: "name"}, "", gui.Key0, gui.ModCtrl)
+	if _, ok := p.Value(2, "name"); ok {
+		t.Fatal("NULL accepted in a NOT NULL column")
+	}
+	endEdit(tv)
+
+	// Select row 0 and delete it from the bottom bar.
+	typeCell(t, w, tv, cellRef{Row: 0, Column: "name"}, "", gui.KeyEscape, 0)
+	soft.RenderToImage(w, 1)
+	clickDialog(t, w, "data-delete")
+	if !p.Deleted(0) {
+		t.Fatal("row 0 not deleted")
+	}
+	addRow(w, tv)
+	w.FrameFn()
+	w.TestRender(nil)
+	if e := tv.Data.Edit; !e.Active || !e.Cell.New || e.Cell.Column != "name" {
+		t.Fatalf("new row edit = %+v", e)
+	}
+	if err := w.TestType(editID, "Dora"); err != nil {
+		t.Fatal(err)
+	}
+	w.TestRender(nil)
+	checkFindings(t, w)
+	screenshot(t, w, "edit-pending")
+	if err := w.TestKey(editID, gui.KeyEnter, 0); err != nil {
+		t.Fatal(err)
+	}
+	if p.Len() != 3 {
+		t.Fatalf("changes = %+v", p.Changes())
+	}
+
+	// Save: preview, then one transaction. Ana has orders, so the DELETE
+	// fails, everything is rolled back and the changes stay pending.
+	save := func() {
+		t.Helper()
+		w.TestRender(nil)
+		if err := w.TestClick(w.ResolveID("data-save")[0]); err != nil {
+			t.Fatal(err)
+		}
+		clickDialog(t, w, "save-confirm")
+		waitFor(t, w, func() bool { return p.Len() == 0 && !tv.Data.Loading || tv.Data.SaveErr != "" })
+	}
+	save()
+	screenshot(t, w, "edit-save-error")
+	if !strings.Contains(tv.Data.SaveErr, "DELETE of row 1") || p.Len() != 3 {
+		t.Fatalf("save error = %q, changes = %d", tv.Data.SaveErr, p.Len())
+	}
+	w.DialogDismiss()
+
+	// Delete Carla instead (no orders).
+	toggleDelete(w, tv, 0, false)
+	toggleDelete(w, tv, 2, false)
+	save()
+	if tv.Data.SaveErr != "" {
+		t.Fatal(tv.Data.SaveErr)
+	}
+	var got []string
+	for _, r := range tv.Data.Page.Rows {
+		got = append(got, strings.Join(query.Values(r[:3]), "|")+map[bool]string{true: "(null)"}[r[2].Null])
+	}
+	// Deleting Ana dropped her edit (restoring a row does not bring it
+	// back); changes run in order, so Dora is inserted before Carla goes.
+	want := []string{"1|Ana|ana@example.com", "2|Bruno|b@x", "4|Dora|(null)"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("rows after save = %v", got)
+	}
+
+	// Leaving with pending changes asks first; Discard goes on.
+	typeCell(t, w, tv, cellRef{Row: 0, Column: "name"}, "!", gui.KeyEnter, 0)
+	openTable(w, key, a.Tables[key][2]) // orders
+	if a.Table != tv {
+		t.Fatal("left the table without asking")
+	}
+	clickDialog(t, w, "unsaved-discard")
+	if a.Table == tv || a.Table.Table.Name != "orders" {
+		t.Fatalf("table = %+v", a.Table.Table)
+	}
+}
+
+func TestMultiSelect(t *testing.T) {
+	a := testApp(t)
+	w := newTestWindow(t, a)
+	key := a.Table.Key
+	openTable(w, key, a.Tables[key][1]) // customers
+	waitFor(t, w, func() bool { return a.Table.Data.fetched })
+	tv := a.Table
+	p := &tv.Data.Pending
+	id := p.AddRow()
+	k := func(r int) rowKey { return rowKey{Row: r} }
+	sel := func() []rowKey { return tv.selectedRows() }
+
+	// Click, Ctrl+click and Shift+click (grid order: new row, then 0..2).
+	selectRow(tv, k(0), "email", 0)
+	selectRow(tv, k(2), "email", gui.ModCtrl)
+	if got := sel(); !slices.Equal(got, []rowKey{k(0), k(2)}) {
+		t.Fatalf("ctrl: %v", got)
+	}
+	selectRow(tv, k(0), "email", gui.ModCtrl) // toggles it off; 0 is the anchor
+	selectRow(tv, k(2), "email", gui.ModShift)
+	if got := sel(); !slices.Equal(got, []rowKey{k(0), k(1), k(2)}) {
+		t.Fatalf("shift: %v", got)
+	}
+	// Shift keeps the anchor: from 0 up to the new row.
+	selectRow(tv, rowKey{Row: id, New: true}, "email", gui.ModShift)
+	if got := sel(); !slices.Equal(got, []rowKey{{Row: id, New: true}, k(0)}) {
+		t.Fatalf("shift up: %v", got)
+	}
+	selectRow(tv, rowKey{Row: id, New: true}, "email", 0)
+	selectRow(tv, k(2), "email", gui.ModShift)
+	want := []rowKey{{Row: id, New: true}, k(0), k(1), k(2)}
+	if got := sel(); !slices.Equal(got, want) {
+		t.Fatalf("shift: %v", got)
+	}
+
+	// Set NULL applies to the active column of every selected row.
+	w.TestRender(nil)
+	soft.RenderToImage(w, 1)
+	w.TestRender(nil)
+	clickDialog(t, w, "data-set-null")
+	for r := range 3 {
+		if v, _ := p.Value(r, "email"); r != 1 && !v.Null {
+			t.Fatalf("row %d email = %+v", r, v)
+		}
+	}
+	if v, ok := p.NewValue(id, "email"); !ok || !v.Null {
+		t.Fatalf("new row email = %+v", v)
+	}
+
+	// Delete (N): the new row is dropped, the others deleted; again restores.
+	selectRow(tv, k(1), "", 0)
+	selectRow(tv, k(2), "", gui.ModShift)
+	w.TestRender(nil)
+	checkFindings(t, w)
+	screenshot(t, w, "multi-select")
+	clickDialog(t, w, "data-delete")
+	if !p.Deleted(1) || !p.Deleted(2) || p.Deleted(0) || !tv.allDeleted() {
+		t.Fatalf("changes = %+v", p.Changes())
+	}
+	clickDialog(t, w, "data-delete")
+	if p.Deleted(1) || p.Deleted(2) {
+		t.Fatal("Restore did not restore")
+	}
+	selectRow(tv, rowKey{Row: id, New: true}, "", 0)
+	clickDialog(t, w, "data-delete")
+	if len(p.NewRows()) != 0 || len(sel()) != 0 {
+		t.Fatalf("new rows = %v, selection = %v", p.NewRows(), sel())
+	}
+}
+
+func TestDateEditor(t *testing.T) {
+	a := testApp(t)
+	w := newTestWindow(t, a)
+	key := a.Table.Key
+	openTable(w, key, a.Tables[key][1]) // customers
+	waitFor(t, w, func() bool { return a.Table.Data.fetched })
+	tv := a.Table
+	p := &tv.Data.Pending
+
+	// A timestamp opens the calendar on the value's month, with its time.
+	ref := cellRef{Row: 0, Column: "created"}
+	startEdit(w, tv, ref)
+	w.TestRender(nil)
+	if !w.DialogIsVisible() || tv.Data.Edit.Active {
+		t.Fatal("the date editor did not open")
+	}
+	de := &tv.Data.Date
+	if de.Clock != "10:20:30" || de.Moment.Day() != 1 || de.Moment.Month() != 3 {
+		t.Fatalf("editor = %+v", de)
+	}
+	soft.RenderToImage(w, 1)
+	w.TestRender(nil)
+	checkFindings(t, w)
+	screenshot(t, w, "date-editor")
+
+	// Pick the 15th, change the time and accept.
+	day := gui.ScopeIDN(calendarID, "day", 15)
+	if ids := w.ResolveID(day); len(ids) == 1 {
+		day = ids[0]
+	}
+	if err := w.TestClick(day); err != nil {
+		t.Fatal(err)
+	}
+	de.Clock = "08:05:00"
+	clickDialog(t, w, "date-ok")
+	if v, _ := p.Value(0, "created"); v.Text != "2024-03-15 08:05:00" || w.DialogIsVisible() {
+		t.Fatalf("created = %+v", v)
+	}
+
+	// A bad time keeps the editor open with an error.
+	startEdit(w, tv, ref)
+	de.Clock = "25:00:00"
+	clickDialog(t, w, "date-ok")
+	if de.Err == "" || !w.DialogIsVisible() {
+		t.Fatal("invalid time accepted")
+	}
+	clickDialog(t, w, "date-null")
+	if v, _ := p.Value(0, "created"); !v.Null {
+		t.Fatalf("Set NULL in the editor: %+v", v)
+	}
+
+	// Set Now from the bottom bar on the selected cell.
+	w.TestRender(nil)
+	clickDialog(t, w, "data-set-now")
+	v, _ := p.Value(0, "created")
+	if _, err := time.Parse("2006-01-02 15:04:05", v.Text); err != nil || v.Null {
+		t.Fatalf("Set Now: %+v", v)
+	}
+	// Set Now is only for dates; Set NULL only for nullable columns.
+	typeCell(t, w, tv, cellRef{Row: 1, Column: "name"}, "", gui.KeyEscape, 0)
+	if tv.canSetNow() || tv.canSetNull() { // name is a NOT NULL text column
+		t.Fatalf("name: canSetNow=%v canSetNull=%v", tv.canSetNow(), tv.canSetNull())
+	}
+	w.TestRender(nil)
+	screenshot(t, w, "edit-bar")
+}
+
+func TestCloseWithUnsavedChanges(t *testing.T) {
+	a := testApp(t)
+	w := newTestWindow(t, a)
+	key := a.Table.Key
+	openTable(w, key, a.Tables[key][1]) // customers
+	waitFor(t, w, func() bool { return a.Table.Data.fetched })
+	tv := a.Table
+
+	// Nothing pending: it closes right away.
+	confirmClose(w)
+	if !w.CloseRequested() {
+		t.Fatal("did not close without changes")
+	}
+
+	w = newTestWindow(t, a)
+	tv.Data.Pending.Set(0, "name", editing.Text("Ann"), editing.Text("Ana"))
+	confirmClose(w)
+	w.TestRender(nil)
+	if w.CloseRequested() || !w.DialogIsVisible() {
+		t.Fatal("closed with unsaved changes")
+	}
+	checkFindings(t, w)
+	screenshot(t, w, "close-unsaved")
+
+	clickDialog(t, w, "close-keep")
+	if w.CloseRequested() || w.DialogIsVisible() || tv.Data.Pending.Len() != 1 {
+		t.Fatal("Keep editing did not keep the changes")
+	}
+
+	confirmClose(w)
+	clickDialog(t, w, "close-discard")
+	if !w.CloseRequested() {
+		t.Fatal("Discard and close did not close")
+	}
 }
 
 func TestSQLRun(t *testing.T) {

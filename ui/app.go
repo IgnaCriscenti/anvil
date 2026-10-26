@@ -7,6 +7,7 @@ import (
 	"github.com/Watts-Argentina/anvil/internal/connections"
 	"github.com/Watts-Argentina/anvil/internal/drivers"
 	"github.com/Watts-Argentina/anvil/internal/history"
+	"github.com/Watts-Argentina/anvil/internal/query"
 	"github.com/Watts-Argentina/anvil/internal/session"
 	"github.com/Watts-Argentina/anvil/internal/settings"
 	"github.com/Watts-Argentina/anvil/models"
@@ -63,6 +64,11 @@ type tableView struct {
 	Key     dbKey
 	Table   drivers.Table
 	Columns []drivers.Column
+	FKs     []drivers.ForeignKey
+	// Filter is set when the view was opened by following a foreign key;
+	// Back is the view it came from.
+	Filter  []query.Cond
+	Back    *tableView
 	Loading bool
 	Err     string
 	Data    dataState

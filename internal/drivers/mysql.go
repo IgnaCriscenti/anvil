@@ -34,6 +34,9 @@ func mysqlConfig(c models.DBConn, password string) (*mysql.Config, error) {
 	cfg.ParseTime = true
 	cfg.Loc = time.UTC
 	cfg.MultiStatements = false
+	// RowsAffected counts the rows found, not only the changed ones: grid
+	// editing checks that every UPDATE matches exactly one row (SPEC §7.3).
+	cfg.ClientFoundRows = true
 
 	switch c.SSLMode {
 	case "", "preferred":
@@ -172,6 +175,16 @@ func (MySQL) Columns(ctx context.Context, db *sql.DB, t Table) ([]Column, error)
 		cols = append(cols, c)
 	}
 	return cols, rows.Err()
+}
+
+func (MySQL) ForeignKeys(ctx context.Context, db *sql.DB, t Table) ([]ForeignKey, error) {
+	return scanForeignKeys(db.QueryContext(ctx, `
+		SELECT CONSTRAINT_NAME, REFERENCED_TABLE_SCHEMA, REFERENCED_TABLE_NAME,
+		       COLUMN_NAME, REFERENCED_COLUMN_NAME
+		FROM information_schema.KEY_COLUMN_USAGE
+		WHERE TABLE_SCHEMA = coalesce(nullif(?, ''), DATABASE()) AND TABLE_NAME = ?
+		  AND REFERENCED_TABLE_NAME IS NOT NULL
+		ORDER BY CONSTRAINT_NAME, ORDINAL_POSITION`, t.Schema, t.Name))
 }
 
 func (MySQL) QuoteIdent(s string) string { return "`" + strings.ReplaceAll(s, "`", "``") + "`" }

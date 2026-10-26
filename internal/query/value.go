@@ -86,7 +86,7 @@ func convert(v any, dbType string) Value {
 		return Value{Null: true}
 	case []byte:
 		b := append([]byte(nil), x...)
-		if isBinaryType(dbType) || !utf8.Valid(b) {
+		if IsBinaryType(dbType) || !utf8.Valid(b) {
 			return Value{Blob: true, Text: blobSummary(b), Raw: b}
 		}
 		return Value{Text: string(b), Raw: b}
@@ -119,7 +119,8 @@ func convert(v any, dbType string) Value {
 	return Value{Text: fmt.Sprint(v), Raw: v}
 }
 
-func isBinaryType(dbType string) bool {
+// IsBinaryType reports whether an (upper-case) engine type is binary.
+func IsBinaryType(dbType string) bool {
 	return strings.Contains(dbType, "BLOB") || strings.Contains(dbType, "BYTEA") ||
 		strings.Contains(dbType, "BINARY")
 }
@@ -159,3 +160,6 @@ func Values(row []Value) []string {
 	}
 	return out
 }
+
+// Text formats a raw value the way the grid shows it.
+func Text(v any) string { return convert(v, "").Text }

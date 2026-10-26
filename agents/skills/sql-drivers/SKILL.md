@@ -21,14 +21,20 @@ type Driver interface {
     MaintenanceDB() string // database of the main connection with no DB: "postgres" in PG, "" elsewhere
     ListTables(ctx context.Context, db *sql.DB) ([]Table, error) // tables and views of the pool's database
     Columns(ctx context.Context, db *sql.DB, table Table) ([]Column, error)
+    ForeignKeys(ctx context.Context, db *sql.DB, table Table) ([]ForeignKey, error) // SPEC §6.5
     QuoteIdent(s string) string
     Placeholder(n int) string // n starts at 1
     SplitStatements(sql string) []Span
 }
 type Table struct { Schema, Name string; IsView bool }
 type Column struct { Name, DBType string; Nullable, PK, AutoInc bool; PKOrdinal int }
+type ForeignKey struct { Name string; Columns []string; RefTable Table; RefColumns []string }
 type Span struct { Start, End int; Text string } // byte offsets into the original SQL
 ```
+
+Foreign keys: SQLite `pragma_foreign_key_list` leaves `"to"` NULL for `REFERENCES parent` without
+columns (it means the parent's PK, resolved in `ForeignKeys`); PG reads `pg_constraint` with
+`unnest(conkey, confkey) WITH ORDINALITY`; MySQL reads `KEY_COLUMN_USAGE` with `REFERENCED_TABLE_NAME`.
 
 A single registry `drivers.For(engine string) (Driver, error)`; no `switch engine` scattered around the code.
 
@@ -38,7 +44,9 @@ A single registry `drivers.For(engine string) (Driver, error)`; no `switch engin
   - PG: `pgx.ParseConfig("")` and set `Host/Port/User/Password/Database`, TLS according to `SSLMode`;
     `stdlib.OpenDB(*cfg)`. Read-only: `cfg.RuntimeParams["default_transaction_read_only"] = "on"`.
   - MySQL: `mysql.NewConfig()`, `Net="tcp"`, `Addr=net.JoinHostPort(host, port)`, `ParseTime=true`,
-    `MultiStatements=false`, `Loc=time.UTC`; `mysql.NewConnector(cfg)` + `sql.OpenDB`.
+    `MultiStatements=false`, `Loc=time.UTC`, `ClientFoundRows=true` (grid editing checks
+    `RowsAffected == 1`; without it an UPDATE with the same value counts 0); `mysql.NewConnector(cfg)` +
+    `sql.OpenDB`.
     Read-only: `initConnector` runs `SET SESSION TRANSACTION READ ONLY` on every new connection (works for
     MySQL and MariaDB; `transaction_read_only` does not exist in old MariaDB).
   - SQLite: `file:///absolute/path?mode=rw|ro` URI built with `url.URL` (escapes `?`, `#`, spaces; the driver

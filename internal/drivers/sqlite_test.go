@@ -82,6 +82,34 @@ func TestSQLiteMetadata(t *testing.T) {
 	}
 }
 
+func TestSQLiteForeignKeys(t *testing.T) {
+	ctx := context.Background()
+	conn := newSQLiteFile(t, sqliteDDL+`
+		create table posts (id integer primary key, author integer references users, tagged_user integer, tag text,
+			foreign key (tagged_user, tag) references tags (user_id, tag));`)
+	db, err := Connect(ctx, conn, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	fks, err := SQLite{}.ForeignKeys(ctx, db, Table{Name: "posts"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// pragma_foreign_key_list numbers the constraints from the last one.
+	want := []ForeignKey{
+		{Name: "0", Columns: []string{"tagged_user", "tag"}, RefTable: Table{Name: "tags"}, RefColumns: []string{"user_id", "tag"}},
+		{Name: "1", Columns: []string{"author"}, RefTable: Table{Name: "users"}, RefColumns: []string{"id"}},
+	}
+	if !reflect.DeepEqual(fks, want) {
+		t.Fatalf("foreign keys = %+v", fks)
+	}
+	if fks, err := (SQLite{}).ForeignKeys(ctx, db, Table{Name: "users"}); err != nil || len(fks) != 0 {
+		t.Fatalf("users foreign keys = %+v, %v", fks, err)
+	}
+}
+
 func TestSQLiteReadOnly(t *testing.T) {
 	ctx := context.Background()
 	conn := newSQLiteFile(t, sqliteDDL)
@@ -131,7 +159,7 @@ func TestMySQLConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Addr != "[::1]:3306" || cfg.Passwd != "secret" || !cfg.ParseTime || cfg.MultiStatements {
+	if cfg.Addr != "[::1]:3306" || cfg.Passwd != "secret" || !cfg.ParseTime || cfg.MultiStatements || !cfg.ClientFoundRows {
 		t.Fatalf("cfg = %+v", cfg)
 	}
 	if _, err := mysqlConfig(models.DBConn{SSLMode: "bogus"}, ""); err == nil {

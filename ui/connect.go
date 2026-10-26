@@ -216,7 +216,22 @@ func promptPassword(w *gui.Window, c models.DBConn, msg string) {
 	})
 }
 
+// disconnect closes the connection, after saving or discarding the pending
+// changes of its open table.
 func disconnect(w *gui.Window, id uint) {
+	leaveTable(w, openTableOf(w, id), true, func(w *gui.Window) { closeConn(w, id) })
+}
+
+// openTableOf returns the table open in the central area if it belongs to
+// connection id.
+func openTableOf(w *gui.Window, id uint) *tableView {
+	if tv := appOf(w).Table; tv != nil && tv.Key.ConnID == id {
+		return tv
+	}
+	return nil
+}
+
+func closeConn(w *gui.Window, id uint) {
 	a := appOf(w)
 	c, _ := a.conn(id)
 	a.forgetConn(id)
@@ -236,12 +251,17 @@ func confirmDelete(w *gui.Window, id uint) {
 	if !ok {
 		return
 	}
+	leaveTable(w, openTableOf(w, id), true, func(w *gui.Window) { askDelete(w, c) })
+}
+
+func askDelete(w *gui.Window, c models.DBConn) {
+	id := c.ID
 	w.Dialog(gui.DialogCfg{
 		DialogType: gui.DialogConfirm,
 		Title:      "Delete connection?",
 		Body:       fmt.Sprintf("The connection %q and its saved password will be deleted. The database itself is not modified.", c.Name),
 		OnOkYes: func(w *gui.Window) {
-			disconnect(w, id)
+			closeConn(w, id)
 			a := appOf(w)
 			async(w, func(ctx context.Context) (struct{}, error) {
 				return struct{}{}, a.Conns.Delete(ctx, id)

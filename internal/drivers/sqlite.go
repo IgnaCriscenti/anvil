@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/Watts-Argentina/anvil/models"
@@ -119,6 +120,36 @@ func (SQLite) Columns(ctx context.Context, db *sql.DB, t Table) ([]Column, error
 		}
 	}
 	return cols, nil
+}
+
+func (d SQLite) ForeignKeys(ctx context.Context, db *sql.DB, t Table) ([]ForeignKey, error) {
+	fks, err := scanForeignKeys(db.QueryContext(ctx, `
+		SELECT CAST(id AS TEXT), '', "table", "from", coalesce("to", '')
+		FROM pragma_foreign_key_list(?)
+		ORDER BY id, seq`, t.Name))
+	if err != nil {
+		return nil, err
+	}
+	// Without explicit columns ("REFERENCES parent") the FK points to the
+	// parent's PK.
+	for i, fk := range fks {
+		if fk.RefColumns[0] != "" {
+			continue
+		}
+		cols, err := d.Columns(ctx, db, fk.RefTable)
+		if err != nil {
+			return nil, err
+		}
+		slices.SortFunc(cols, func(a, b Column) int { return a.PKOrdinal - b.PKOrdinal })
+		cols = slices.DeleteFunc(cols, func(c Column) bool { return !c.PK })
+		if len(cols) != len(fk.Columns) {
+			continue
+		}
+		for j, c := range cols {
+			fks[i].RefColumns[j] = c.Name
+		}
+	}
+	return slices.DeleteFunc(fks, func(fk ForeignKey) bool { return fk.RefColumns[0] == "" }), nil
 }
 
 func (SQLite) QuoteIdent(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }

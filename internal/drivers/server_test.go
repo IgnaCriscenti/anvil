@@ -66,7 +66,7 @@ func TestPostgresServer(t *testing.T) {
 		create schema anvil_test;
 		create table anvil_test.users (id int generated always as identity primary key, name text not null, data jsonb);
 		create table anvil_test.tags (user_id int, tag text, primary key (tag, user_id));
-		create table anvil_test.legacy (id serial primary key);
+		create table anvil_test.legacy (id serial primary key, owner int references anvil_test.users);
 		create view anvil_test.v as select 1 as x;
 		create materialized view anvil_test.mv as select 1 as x;`)
 	defer db.Exec("drop schema anvil_test cascade")
@@ -114,6 +114,12 @@ func TestPostgresServer(t *testing.T) {
 	if !cols[0].AutoInc {
 		t.Fatalf("serial not autoinc: %+v", cols)
 	}
+	fks, err := d.ForeignKeys(ctx, db, Table{Schema: "anvil_test", Name: "legacy"})
+	wantFKs := []ForeignKey{{Name: "legacy_owner_fkey", Columns: []string{"owner"},
+		RefTable: Table{"anvil_test", "users", false}, RefColumns: []string{"id"}}}
+	if err != nil || !reflect.DeepEqual(fks, wantFKs) {
+		t.Fatalf("legacy foreign keys = %+v, %v", fks, err)
+	}
 
 	// Session-level read-only.
 	conn.ReadOnly = true
@@ -141,7 +147,8 @@ func TestMySQLServer(t *testing.T) {
 		drop table if exists users, tags;
 		drop view if exists v;
 		create table users (id int auto_increment primary key, name varchar(50) not null, note text);
-		create table tags (user_id int, tag varchar(20), primary key (tag, user_id));
+		create table tags (user_id int, tag varchar(20), primary key (tag, user_id),
+			constraint tags_user foreign key (user_id) references users (id));
 		create view v as select 1 as x;`)
 
 	dbs, err := d.ListDatabases(ctx, db)
@@ -153,6 +160,8 @@ func TestMySQLServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Other packages' server tests may have tables in the same database.
+	tables = slices.DeleteFunc(tables, func(tb Table) bool { return !slices.Contains([]string{"tags", "users", "v"}, tb.Name) })
 	want := []Table{{conn.DB, "tags", false}, {conn.DB, "users", false}, {conn.DB, "v", true}}
 	if !reflect.DeepEqual(tables, want) {
 		t.Fatalf("tables = %+v", tables)
@@ -173,6 +182,12 @@ func TestMySQLServer(t *testing.T) {
 	cols, _ = d.Columns(ctx, db, Table{Name: "tags"})
 	if cols[0].PKOrdinal != 2 || cols[1].PKOrdinal != 1 {
 		t.Fatalf("tags = %+v", cols)
+	}
+	fks, err := d.ForeignKeys(ctx, db, Table{Name: "tags"})
+	wantFKs := []ForeignKey{{Name: "tags_user", Columns: []string{"user_id"},
+		RefTable: Table{conn.DB, "users", false}, RefColumns: []string{"id"}}}
+	if err != nil || !reflect.DeepEqual(fks, wantFKs) {
+		t.Fatalf("tags foreign keys = %+v, %v", fks, err)
 	}
 
 	conn.ReadOnly = true

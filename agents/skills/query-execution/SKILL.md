@@ -52,6 +52,11 @@ type StmtResult struct {
   `SELECT * FROM (<query>) AS q LIMIT n OFFSET k`. Strip the trailing `;` and do not wrap if the query already
   has a top-level `LIMIT` that would break it (in that case, read and cut on the client). Other statements
   run as is.
+- `TableSource.Filter` (`[]Cond`, column = value) adds a `WHERE` to every page and to `Count`: it is how a
+  table opened by following a foreign key shows only the referenced rows (SPEC §6.5). The filter takes the
+  first placeholders; keyset conditions go after it.
+- Loading a new page discards the grid's pending changes (`grid-editing` skill): ask first with
+  `leaveTable`.
 - `COUNT(*)` only on demand (button), with its own cancellable context.
 - Identifiers always with `QuoteIdent`, values always with `Placeholder`.
 

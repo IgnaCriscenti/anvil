@@ -42,17 +42,21 @@ Local references (copied from the go-gui repo, MIT license in `references/GO-GUI
 | Sidebar + central area layout (§4)      | `gui.Splitter` (`view_splitter.go`), `Row`/`Column`       | `examples/dock_layout`, `explorer`   |
 | Table / SQL tabs (§4)                   | `gui.TabControl` (`view_tab_control.go`)                  | `examples/showcase`                  |
 | Table list with filter (§4)             | `gui.ListBox` or a virtual list                           | `examples/listbox`, `virtual_list`   |
-| Data grid (§6, §7)                      | `datagrid.New(w, datagrid.DataGridCfg{...})` (`gui/datagrid`) | `examples/data_grid_data_source` |
-| Connection modal / confirmations        | `w.Dialog(gui.DialogCfg{...})` (`view_dialog.go`), `w.NativeConfirmDialog`, `w.NativeSaveDiscardDialog` | `examples/dialogs` |
+| Data grid (§6, §7)                      | `gui.Table` with per-cell `TextStyle`/`Content`/`OnClick` (`gridTable`, `dataGrid`); **not** `datagrid` (see below) | `ui/dataGrid.go` |
+| Connection modal / confirmations        | `w.Dialog(gui.DialogCfg{...})` (`view_dialog.go`), `DialogConfirm` or `DialogCustom`. Anvil uses in-window dialogs (`leaveTable`, `confirmClose`), not `NativeSaveDiscardDialog` (needs a native platform) | `examples/dialogs` |
+| Window close with unsaved changes (§7.2) | `WindowCfg.OnCloseRequest`; the hook calls `w.Close()` to proceed | `ui/start.go` |
+| Date / time editing (§6.4)              | `gui.DatePicker` (days only) + `gui.Input` with `Mask: "99:99:99"` | `ui/dateEditor.go`, `examples/date_picker_options` |
 | SQLite file picker (§3.3)               | `w.NativeOpenDialog(gui.NativeOpenDialogCfg{...})`        | `gui/native_dialog.go`               |
 | Export to file (§9)                     | `w.NativeSaveDialog(...)`                                 | `gui/native_dialog.go`               |
-| Context menu (set NULL, §6.4)           | `gui.ContextMenu(w, gui.ContextMenuCfg{...})` (`view_context_menu.go`) | `examples/context_menu` |
+| Set NULL (§6.4)                         | Bottom edit bar + `Ctrl+0` in the input (`ui/dataTab.go`); `gui.ContextMenu` exists if a menu is ever needed | `examples/context_menu` |
 | Non-blocking notices                    | `w.Toast(gui.ToastCfg{...})` (`view_toast.go`)            | cheat sheet "Toast position"         |
 | SQL highlighting (§5.1)                 | `gui/highlight` package (chroma, language `"sql"`); the editor can be `go-edit` (sibling module) or a multiline input | `examples/multiline_input` |
 | Local settings (§6.3)                   | Anvil uses GORM (`Settings`), **not** `gui.SaveSettings`  | —                                    |
 | Keyring (§3.2)                          | Anvil uses `zalando/go-keyring`; `gui.SaveSecret` exists and returns `gui.ErrSecretsUnsupported` if there is no store | `examples/secrets` |
 
-### Datagrid: important notes
+### Datagrid: why anvil does not use it
+
+Anvil's grids are `gui.Table` (see "Lessons learned"). Notes kept for reference:
 
 - `datagrid.DataGridCfg` requires an `ID`. For anvil use **controlled mode**: pass `Rows []datagrid.GridRow` and `Columns []datagrid.GridColumnCfg`, handle `OnCellEdit`, `OnPageChange`, `OnQueryChange` and keep the changes in the app state (pending changes belong to anvil, see the `grid-editing` skill).
 - `DataGridDataSource` has unexported fields in request/result/capabilities: implementing it outside the package is not viable in v0.92. Paginate yourself (`query-execution` skill) and pass the page as `Rows`.
@@ -73,6 +77,19 @@ Local references (copied from the go-gui repo, MIT license in `references/GO-GUI
 - **Grids**: use `gui.Table` (per-cell style via `TableCellCfg.TextStyle`), not `datagrid` (its
   `GridCellFormat` cannot be built from outside). Give it a bounded height (measured `Height`) so it
   virtualizes; truncate long values because columns are sized from the text.
+- **Widgets in `gui.Table` cells**: `TableCellCfg.Content` replaces the text, but column widths are still
+  measured from `Value`; pad `Value` to make room for the widget (see `linkCell` in `ui/resultGrid.go`).
+- **`TableCellCfg.ID` is not applied** to the cell (v0.92): a test cannot click a cell by ID. Put IDs on
+  the widgets inside the cell, or call the handler directly.
+- **Cell styles**: `TextStyle.BgColor` highlights the text (modified cells) and `Strikethrough` crosses it
+  (deleted rows). `gui.Theme` has no `ColorSuccess`/`ColorError`: use `TextStyleSuccess.Color` /
+  `TextStyleError.Color`.
+- **Inline editors**: a `FocusDisabled` button keeps the focus in the input being edited (Set NULL). Focus
+  the input with `w.QueueCommand(func(w){ w.SetFocus(id) })` right after enabling it; `OnTextCommit` fires
+  on Enter and on blur (the blur one runs after the frame pass).
+- **Dates**: `gui.DatePicker` is a calendar for days only (no time); its visible month lives in window state
+  keyed by ID, so reset it with `w.DatePickerReset(id)`. Day cells are `ScopeIDN(id, "day", d)`. A time field
+  is an `Input` with `Mask: "99:99:99"`.
 - **Fixed sizes**: `measuredBox` (`ui/resultGrid.go`) measures a panel in `AmendLayout` and re-lays out if it
   changed; the go-edit editor (needs `Width`/`Height`) and the grid use it.
 - **go-edit**: custom actions with `EditorCfg.Actions` + `Keymaps`; `ActionFunc` uses an unexported type, so it

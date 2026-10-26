@@ -26,6 +26,9 @@ type Driver interface {
 	// ListTables returns the tables and views of the pool's database.
 	ListTables(ctx context.Context, db *sql.DB) ([]Table, error)
 	Columns(ctx context.Context, db *sql.DB, table Table) ([]Column, error)
+	// ForeignKeys returns the table's foreign keys, with their columns in
+	// constraint order.
+	ForeignKeys(ctx context.Context, db *sql.DB, table Table) ([]ForeignKey, error)
 	QuoteIdent(s string) string
 	// Placeholder returns the marker for parameter n (starting at 1).
 	Placeholder(n int) string
@@ -46,6 +49,39 @@ type Column struct {
 	PK        bool
 	PKOrdinal int // position in the PK, starting at 1; 0 if not part of the PK
 	AutoInc   bool
+}
+
+// ForeignKey is a foreign key: Columns[i] references RefColumns[i] of
+// RefTable.
+type ForeignKey struct {
+	Name       string
+	Columns    []string
+	RefTable   Table
+	RefColumns []string
+}
+
+// scanForeignKeys groups rows of (constraint, ref schema, ref table, column,
+// ref column), ordered by constraint and position, into foreign keys.
+func scanForeignKeys(rows *sql.Rows, err error) ([]ForeignKey, error) {
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var fks []ForeignKey
+	for rows.Next() {
+		var name, schema, table, col, ref string
+		if err := rows.Scan(&name, &schema, &table, &col, &ref); err != nil {
+			return nil, err
+		}
+		if n := len(fks); n == 0 || fks[n-1].Name != name {
+			fks = append(fks, ForeignKey{Name: name, RefTable: Table{Schema: schema, Name: table}})
+		}
+		fk := &fks[len(fks)-1]
+		fk.Columns = append(fk.Columns, col)
+		fk.RefColumns = append(fk.RefColumns, ref)
+	}
+	return fks, rows.Err()
 }
 
 // Span is a statement within the original SQL. Start/End are byte

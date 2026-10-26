@@ -24,7 +24,7 @@ Included:
 - Light/dark theme.
 
 Out of scope for v1:
-- Full schema explorer (indexes, FKs, triggers, DDL).
+- Full schema explorer (indexes, triggers, DDL). Foreign keys are only read to navigate between rows (§6.5).
 - SSH tunnel and connection folders/groups.
 - Multiple SQL editor tabs per connection (see §5.1).
 - Specialized JSON/JSONB editor (shown and edited as text).
@@ -37,17 +37,17 @@ Out of scope for v1:
 
 ```
 main.go
-ui/                  go-gui views (layout, modals, grid, editor)
+ui/                  go-gui views (layout, modals, grid and its editing, SQL editor)
 ui/components/       reusable components (IconButton, Icon, …)
 internal/connections connection CRUD service + keyring
 internal/storage     opening and migrating the local database
 internal/settings    local preferences (single row)
 internal/session     open connections: one *sql.DB per connection
 internal/drivers     per-engine abstraction: connection, dialect, metadata, split and analysis
-internal/query       (new) async execution, pagination, cancellation, statement splitting
-internal/editing     (new) pending changes and DML generation
-internal/history     (new) query history
-internal/export      (new) CSV / JSON
+internal/query       async execution, pagination (with FK filter), cancellation
+internal/editing     pending changes, validation, DML generation and the save transaction
+internal/history     query history
+internal/export      (pending) CSV / JSON
 models/              GORM models for the local configuration
 pkg/appErrors        errors with Title/Description to show in the UI
 assets/              own embedded SVG icons
@@ -71,11 +71,17 @@ assets/              own embedded SVG icons
   no empty file is created if the path does not exist.
 - `Driver` interface per engine:
   - `Open(ctx, DBConn, password) (*sql.DB, error)`
+  - `ListDatabases(ctx) ([]string, error)` and `MaintenanceDB() string`: for connections without a database (§3.4).
   - `ListTables(ctx) ([]Table, error)`: tables and views.
   - `Columns(ctx, table) ([]Column, error)`: name, type, nullable, whether it is a PK, whether it is identity/autoincrement.
+  - `ForeignKeys(ctx, table) ([]ForeignKey, error)`: name, columns, referenced table and columns (in order).
   - `QuoteIdent(string) string`: `"x"` in PG/SQLite, `` `x` `` in MySQL.
   - `Placeholder(n int) string`: `$n` in PG, `?` in MySQL/SQLite.
   - `SplitStatements(sql string) []Span`: respects strings, comments, `$$` (PG) and `DELIMITER` (MySQL).
+  - `Analyze(stmt string) Statement`: kind of statement (read/write, DML, `WHERE`, transaction control) for
+    the safeguards (§8).
+- MySQL connections use `ClientFoundRows` so that `RowsAffected` counts the rows found, not only the changed
+  ones (§7.3).
 
 ---
 
@@ -130,26 +136,32 @@ assets/              own embedded SVG icons
 ## 4. Layout
 
 ```
-┌─ [+Add] [x Delete] ─────────────────┐
-│ ● prod-pg    │ [users] [SQL] [+]     │
-│   users      │──────────────────────│
-│   orders     │ id │ name  │ email    │
-│ ● local.db   │  1 │ Ana   │ a@x.com  │
-│              │  2 │ Bruno │ b@x.com  │
-│              │ [Save 2] [Discard] 1/40│
-└──────────────┴──────────────────────┘
+┌─ [+Add] [Edit] [Delete] [Disconnect] ────────────────────────────────── [☀] ┐
+│ ● prod-pg    │ ‹ users                                                      │
+│   users      │ [Structure] [Data] [SQL]                                     │
+│   orders     │ ⟳ ‹ Page 1 › [100▾] rows per page     Count rows             │
+│ ● local.db   │  # │ id │ name  │ email   │ customer_id                      │
+│              │  + │    │ Dora  │ DEFAULT │ DEFAULT                          │
+│              │  1 │ 1  │ Ana   │ a@x.com │ 3 [→]                            │
+│              │  2 │ 2  │ Bruno │ NULL    │ 1 [→]                            │
+│              │                                                              │
+│              │ [Save (2)] [Cancel] │ [Add] [Delete] │ [Set NULL] [Set Now]  │
+└──────────────┴──────────────────────────────────────────────────────────────┘
+ status bar
 ```
 
-- **Top bar**: global actions (new connection, delete, connect, export, theme).
+- **Top bar**: global actions (add, edit and delete connections, connect/disconnect, theme).
 - **Sidebar**: connections with their color dot. Expanding an open connection shows a flat list of
   tables and views, with a text filter. If the connection has no database (§3.4), the databases are listed
   first and each one expands into its table list and its filter.
 - **Central area**: clicking a table opens it with three tabs:
-  - **Structure**: columns with type, nullable and PK/autoincrement.
-  - **Data**: paginated grid of the table (§6), read-only for now (editing is §7).
+  - **Structure**: columns with type, nullable, PK/autoincrement and FK.
+  - **Data**: paginated grid of the table (§6), with foreign key navigation (§6.5) and editing (§7) through
+    the bar below the grid.
   - **SQL**: SQL editor that runs against that table's database (§5). The editor text and its last result
     are per database: they are kept when switching between tables of the same database.
-  The selected tab is kept when opening another table.
+  The selected tab is kept when opening another table. A table opened by following a FK has a back button
+  (`‹`) next to its name.
 - **Status bar**: active connection, query status, time, rows, pagination.
 
 ---
@@ -212,16 +224,28 @@ assets/              own embedded SVG icons
 
 | Type               | Display                               | Editing                     |
 |--------------------|---------------------------------------|-----------------------------|
-| Text / numbers     | As is                                 | Text input                  |
-| Date / timestamp   | ISO 8601 (`2006-01-02 15:04:05[.000] ±07:00`) | Input with format validation |
+| Text / numbers     | As is                                 | Inline text input           |
+| Date / time / timestamp | ISO 8601 (`2006-01-02 15:04:05[.000] ±07:00`) | Dialog with a calendar (dates) and an `HH:MM:SS` field (times), or **Set Now**; never typed text |
 | BLOB / bytea       | `<BLOB 1.2 KB>` + first bytes in hex  | **Read-only**               |
-| JSON / JSONB       | Text                                  | Text input                  |
-| NULL               | Dimmed `NULL`, distinct from `''`     | Can be set to NULL (`Ctrl+0` or context menu) if the column is nullable |
+| JSON / JSONB       | Text                                  | Inline text input           |
+| NULL               | Dimmed `NULL`, distinct from `''`     | **Set NULL** (`Ctrl+0` in the input) if the column is nullable |
 
 The grids (Structure, Data and SQL results) draw every border, inner and outer, and the header row has a
-background different from the data rows. Cells show only the first line of the value, cut at 30 characters
+background different from the data rows. The Data grid starts with a `#` column that numbers the rows shown
+from 1. Cells show only the first line of the value, cut at 30 characters
 and ending in `…` if something was trimmed. Columns that do not fit in the panel width are reachable with
 horizontal scroll (scrollbar or Shift+wheel).
+
+### 6.5 Foreign key navigation
+
+- When a table is opened its foreign keys are read along with its columns (not for views). The Structure tab
+  shows them in the Key column (`FK → table.column`).
+- In the Data tab, every non-NULL cell of a foreign key column has a link button after the value. It opens the
+  referenced table in the Data tab, filtered by `refcol = value` (every column of a composite FK); the
+  filter is shown in the toolbar and applies to pagination and `COUNT(*)`.
+- A table opened this way has a back button in its header that returns to the previous table with its page
+  as it was. Opening a table from the sidebar starts over.
+- SQL editor results have no links (their columns are not tied to a table).
 
 ---
 
@@ -229,33 +253,65 @@ horizontal scroll (scrollbar or Shift+wheel).
 
 ### 7.1 Where editing is allowed
 
-- Only in **table tabs** opened from the sidebar. SQL editor results are **never** editable.
+- Only in the **Data tab** of a table, opened from the sidebar or by following a foreign key (§6.5). SQL
+  editor results are **never** editable.
 - If the connection is marked `ReadOnly`, the grid is read-only.
-- Views are read-only.
+- Views are read-only. BLOB columns are read-only.
 
 ### 7.2 Pending changes
 
-- Every edit, insertion or row deletion stays **pending**. Modified cells are highlighted, new rows are
-  marked with `+` and deleted rows are struck through.
-- **Save (N)** opens a preview of the SQL that will run and, on confirmation, applies everything in **one
-  transaction**. If a statement fails, everything is rolled back and the failing one is reported.
-- **Discard** drops every pending change.
-- Closing the tab or changing page with pending changes asks for confirmation.
+- Every edit, insertion or row deletion stays **pending** until it is saved. Modified cells are highlighted,
+  new rows go on top of the grid marked `+` (unset columns show `DEFAULT`) and deleted rows are struck
+  through (their `#` number too).
+- Pending changes refer to the rows of the current page.
+- **Save (N)** opens a preview of the SQL that will run (with the values inlined, only to show them) and, on
+  confirmation, applies everything in **one transaction**, in the order the changes were made. If a
+  statement fails, everything is rolled back, the error is shown in the preview naming the change
+  (for example "The DELETE of row 1 failed: …") and the changes stay pending so they can be fixed.
+- **Cancel** discards every pending change.
+- Changing page, refreshing, changing the page size, going back, opening another table, disconnecting or
+  deleting the connection with pending changes asks first: **Save…**, **Discard** or **Cancel**.
+- Closing the window with unsaved changes (including a cell being edited) asks to **Keep editing** or
+  **Discard and close**.
 
 ### 7.3 Row identification
 
-- **With a PK**: `UPDATE/DELETE … WHERE pk1 = ? [AND pk2 = ?]`.
-- **Without a PK**: the `WHERE` uses **every column** with its original values (`col IS NULL` for
-  NULLs; BLOBs and non-comparable types are excluded). A warning is shown before enabling editing.
+- **With a PK**: `UPDATE/DELETE … WHERE pk1 = ? [AND pk2 = ?]` with the original values.
+- **Without a PK**: the `WHERE` uses **every comparable column** with its original values (`col IS NULL`
+  for NULLs; binary, JSON, XML, geometric and floating point columns are excluded). A warning is shown
+  before the first change to an existing row.
 - **Single-row guarantee**: after each `UPDATE`/`DELETE`, `RowsAffected == 1` is checked. If it is any
   other number, the **whole transaction is rolled back** and the offending row is reported
-  (for example "would affect 3 identical rows").
+  (for example "would affect 3 identical rows", or "found no row" if it was changed or deleted meanwhile).
 
 ### 7.4 DML generation
 
 - Always with parameters (`Placeholder`) and table and column names with `QuoteIdent`; values are never
-  concatenated.
-- `INSERT` omits identity/autoincrement columns left empty.
+  concatenated. Values are sent as text (NULL as `nil`) and the engine converts them to the column type.
+- `INSERT` only lists the columns the user set, omitting identity/autoincrement columns left empty; with no
+  columns it inserts the defaults.
+- MySQL does not accept the offset the grid shows in dates (`… +00:00`): dates are sent in UTC without it.
+  MySQL `BOOL` is `TINYINT` (0/1).
+
+### 7.5 Editing in the Data tab
+
+- **Selection**: clicking a cell selects its row and opens the cell's editor. Ctrl+click (Cmd on macOS) adds
+  or removes rows and Shift+click selects a range from the last row picked, without editing. Clicking a `#`
+  number selects the row without editing. Selected rows have their number filled with the accent color and a
+  tinted background; the clicked cell is underlined.
+- **Editors**: text and numbers use an inline input: Enter or leaving the cell keeps the value, Esc
+  discards it, `Ctrl+0` sets NULL. **Dates and times never ask for text**: a dialog with a calendar (dates)
+  and an `HH:MM:SS` field (times) opens on the cell's value, with **Now**, **Set NULL** (if nullable),
+  **Cancel** and **OK**. The offset is kept for `with time zone` types.
+- **Bar below the grid**:
+
+  | Group | Buttons | Acts on |
+  |-------|---------|---------|
+  | Changes | **Save (N)**, **Cancel** | Every pending change |
+  | Rows | **Add**, **Delete (N)** / **Restore** | Add: a new row on top, editing its first column. Delete: the selected rows (new rows are removed); Restore when all of them are already deleted |
+  | Values | **Set NULL**, **Set Now** | The column of the clicked cell in every selected row (or the cell being edited). Set NULL only for nullable columns; Set Now only for date/time columns |
+
+  On the right, the bar shows how many rows are selected and a summary of the pending changes.
 
 ---
 
@@ -317,8 +373,14 @@ The 6 findings from the initial review are resolved (milestone 1):
   OFFSET, on-demand COUNT, dimmed NULL, summarized BLOB), SQL editor with go-edit: Ctrl+Enter (selection or
   statement under the cursor), several statements with the last result, warnings (no WHERE / no transaction),
   read-only, Stop, results pagination and saving to history (`internal/query`, `internal/history`).
+- **Foreign key navigation** in the Data tab (§6.5): link buttons on FK cells, filtered referenced table,
+  back button.
 - **Milestone 3**: autocompletion, history panel with search, metadata refresh.
-- **Milestone 4**: grid editing (`internal/editing`).
+- **Milestone 4 (done)**: grid editing (`internal/editing`, §7): pending changes, SQL preview, single
+  transaction with the `RowsAffected == 1` check, row identification with or without a PK, multi-row
+  selection with the `#` column, bar below the grid (Save, Cancel | Add, Delete | Set NULL, Set Now),
+  calendar/time editor for dates, and confirmation before leaving or closing the window with unsaved
+  changes.
 - **Milestone 5**: export, packaging and release.
 
 ### 12.2 Known dependency limitations
@@ -330,7 +392,11 @@ The 6 findings from the initial review are resolved (milestone 1):
 - go-gui v0.92: a horizontally scrolling container stores the content width before the table takes its
   final width and clips the scroll to that value. The grid measures its natural width every frame and passes
   it as `MinWidth` (`naturalWidth` in `ui/resultGrid.go`).
-- go-gui v0.92: `gui.Table` has no header color; row 0 is painted as selected (`gridStyle`).
+- go-gui v0.92: `gui.Table` has no header color; row 0 is painted as selected (`gridStyle`). It has no
+  per-row background either: selected rows are shown with the `#` number filled and a text background.
+- go-gui v0.92: `gui.Table` measures column widths from `TableCellCfg.Value` even when the cell has
+  `Content` (buttons, inputs): the value is padded to make room. `TableCellCfg.ID` is not applied to the cell.
+- go-gui v0.92: `gui.DatePicker` only picks days; times use a masked input next to it.
 - go-edit v0.12: `ActionFunc` takes an unexported type; the run action is declared generic
   (`runAction[S any]`) and reads the cursors through reflection.
 - When an execution ends with an open transaction (`BEGIN` without `COMMIT`), a `ROLLBACK` is issued and the

@@ -67,7 +67,12 @@ The 6 items from the initial review are resolved. See SPEC §12.1 for progress b
 
 - `ui/app.go`: `App` (window state), `appOf(w)`, `async(w, work, done)` for all I/O (runs in a goroutine and
   comes back with `QueueCommand` + `InvalidateLayout`), `showError` (dialog) and `showWarning` (toast).
-- Inside a custom dialog, errors go **inline** (`App.Form.Error`): a new `w.Dialog` replaces the open one.
+- Inside a custom dialog, errors go **inline** (`App.Form.Error`, `dataState.SaveErr`): a new `w.Dialog`
+  replaces the open one.
+- Central area: `App.Table` is the open `tableView` (columns, FKs, FK filter, `Back` to the view it came
+  from) and `tableView.Data` is the Data tab state (page, pending changes, selection). `openTable` (sidebar)
+  starts a new chain; `showTable`/`followFK` push onto it. Anything that drops a view or a page with pending
+  changes goes through `leaveTable` (`grid-editing` skill).
 - UI tests in `ui/ui_test.go`: `testApp` builds real state with SQLite; `checkFindings` uses
   `TestFindings(gui.DebugAll)`; `ANVIL_SCREENSHOTS=<dir> go test ./ui/` saves headless PNGs (`soft` backend).
 
@@ -75,5 +80,12 @@ The 6 items from the initial review are resolved. See SPEC §12.1 for progress b
 
 - `gofmt`, `go vet ./...`, `go build ./...` and `CGO_ENABLED=0 go build ./...` on Linux.
 - Tests with `go test ./...`; `internal/*` logic is tested against in-memory SQLite
-  (`file::memory:?cache=shared`) and, if Docker is available, against real PG/MySQL.
+  (`file::memory:?cache=shared`) and, if Docker is available, against real PG/MySQL:
+  ```sh
+  docker run -d --rm --name anvil-pg -e POSTGRES_PASSWORD=anvil -p 127.0.0.1:55432:5432 postgres:18-alpine
+  docker run -d --rm --name anvil-my -e MYSQL_ROOT_PASSWORD=anvil -e MYSQL_DATABASE=anvil -p 127.0.0.1:53306:3306 mysql:8.4
+  ANVIL_TEST_PG="127.0.0.1 55432 postgres anvil postgres" ANVIL_TEST_MYSQL="127.0.0.1 53306 root anvil anvil" go test -count=1 ./...
+  ```
+  Packages run in parallel against the **same** server databases: each test uses its own tables and must
+  not assume it sees only those (filter listings).
 - If the behavior described in `SPEC.md` changes, update the spec in the same change.

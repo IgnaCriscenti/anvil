@@ -121,6 +121,23 @@ func (s *Session) Columns(ctx context.Context, database string, t drivers.Table)
 	return cols, nil
 }
 
+// ForeignKeys returns the foreign keys of a table of database.
+func (s *Session) ForeignKeys(ctx context.Context, database string, t drivers.Table) ([]drivers.ForeignKey, error) {
+	db, err := s.Pool(ctx, database)
+	if err != nil {
+		return nil, err
+	}
+	fks, err := s.Driver.ForeignKeys(ctx, db, t)
+	if err != nil {
+		return nil, appErrors.Error(
+			"Failed to read foreign keys.",
+			"The foreign keys of "+t.Name+" could not be read: "+err.Error(),
+			err,
+		)
+	}
+	return fks, nil
+}
+
 // Close closes the main pool and the pool of each database.
 func (s *Session) Close() error {
 	s.mu.Lock()
