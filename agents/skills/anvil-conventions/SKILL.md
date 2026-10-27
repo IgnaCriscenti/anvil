@@ -21,6 +21,7 @@ internal/session        Manager: one *sql.DB per open connection (thread-safe)
 internal/drivers        Driver interface per engine (sql-drivers skill)
 internal/query          async execution, pagination, split (query-execution skill)
 internal/editing        pending changes and DML (grid-editing skill)
+internal/schema         DDL: CREATE TABLE / CREATE DATABASE builders and Exec (SPEC §3.5)
 internal/history        query history
 internal/export         CSV / JSON
 models/                 GORM models for the local config

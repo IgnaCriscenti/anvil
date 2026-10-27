@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -16,6 +17,7 @@ import (
 	"github.com/Watts-Argentina/anvil/internal/editing"
 	"github.com/Watts-Argentina/anvil/internal/history"
 	"github.com/Watts-Argentina/anvil/internal/query"
+	"github.com/Watts-Argentina/anvil/internal/schema"
 	"github.com/Watts-Argentina/anvil/internal/settings"
 	"github.com/Watts-Argentina/anvil/internal/storage"
 	"github.com/Watts-Argentina/anvil/models"
@@ -197,6 +199,73 @@ func TestAllDatabases(t *testing.T) {
 	w.TestRender(nil)
 	checkFindings(t, w)
 	screenshot(t, w, "all-databases")
+
+	// New database: created, listed and expanded.
+	name := fmt.Sprintf("anvil_newdb_%d", time.Now().UnixNano())
+	s, _ := a.Sessions.Get(res.Conn.ID)
+	t.Cleanup(func() { s.DB.Exec(`DROP DATABASE IF EXISTS "` + name + `" WITH (FORCE)`) })
+	if err := w.TestClick(gui.ScopeID(gui.ScopeIDN("conn", "", int(res.Conn.ID)), "new-db")); err != nil {
+		t.Fatal(err)
+	}
+	a.NewDB.Name = name
+	w.TestRender(nil)
+	checkFindings(t, w)
+	clickDialog(t, w, "nd-create")
+	newKey := dbKey{ConnID: res.Conn.ID, Database: name}
+	waitFor(t, w, func() bool { return a.DBExpanded[newKey] && !a.Loading[newKey] })
+	if !slices.Contains(a.Databases[res.Conn.ID], name) {
+		t.Fatalf("databases = %v", a.Databases[res.Conn.ID])
+	}
+}
+
+func TestNewTable(t *testing.T) {
+	a := testApp(t)
+	w := newTestWindow(t, a)
+	scope := gui.ScopeIDN("conn", "", int(a.Selected))
+	if err := w.TestClick(gui.ScopeID(scope, "new-table")); err != nil {
+		t.Fatal(err)
+	}
+	w.TestRender(nil)
+	f := &a.NewTable
+	if len(f.Columns) != 2 || !f.Columns[0].AutoInc {
+		t.Fatalf("initial columns: %+v", f.Columns)
+	}
+	checkFindings(t, w)
+
+	// Repeated column names keep Create disabled.
+	f.Name = "notes"
+	f.Columns[1].Name = "ID"
+	w.TestRender(nil)
+	if err := w.TestClick(w.ResolveID("nt-create")[0]); err == nil || f.Busy {
+		t.Fatal("Create is enabled for an invalid table")
+	}
+
+	f.Columns[1].Name = "body"
+	f.addColumn(schemaColumn("at", "timestamp", "CURRENT_TIMESTAMP"))
+	// Unchecking PK also clears auto-increment.
+	clickDialog(t, w, gui.ScopeID(gui.ScopeIDN("nt-col", "", f.Columns[0].ID), "pk"))
+	if f.Columns[0].PK || f.Columns[0].AutoInc {
+		t.Fatalf("pk toggle: %+v", f.Columns[0])
+	}
+	clickDialog(t, w, gui.ScopeID(gui.ScopeIDN("nt-col", "", f.Columns[0].ID), "pk"))
+	clickDialog(t, w, gui.ScopeID(gui.ScopeIDN("nt-col", "", f.Columns[1].ID), "null"))
+	w.TestRender(nil)
+	checkFindings(t, w)
+	screenshot(t, w, "new-table")
+
+	clickDialog(t, w, "nt-create")
+	waitFor(t, w, func() bool { return a.Table != nil && a.Table.Table.Name == "notes" && !a.Table.Loading })
+	cols := a.Table.Columns
+	if len(cols) != 3 || !cols[0].PK || cols[1].Nullable || !cols[2].Nullable {
+		t.Fatalf("columns: %+v", cols)
+	}
+	if !slices.ContainsFunc(a.Tables[a.Table.Key], func(tb drivers.Table) bool { return tb.Name == "notes" }) {
+		t.Fatal("sidebar not reloaded")
+	}
+}
+
+func schemaColumn(name, typ, def string) schema.Column {
+	return schema.Column{Name: name, Type: typ, Default: def, Nullable: true}
 }
 
 // waitFor processes frames until cond holds (the asyncs come back through
@@ -755,21 +824,5 @@ func TestWideTable(t *testing.T) {
 	w.TestRender(nil)
 	if cw := a.Table.Data.gridSize.ContentW; cw == 0 || cw >= size.W {
 		t.Fatalf("content width after a narrow table = %v", cw)
-	}
-}
-
-func TestCellText(t *testing.T) {
-	n := maxCellChars
-	long := strings.Repeat("a", 2*n)
-	for in, want := range map[string]string{
-		"short":                "short",
-		strings.Repeat("a", n): strings.Repeat("a", n),
-		long:                   strings.Repeat("a", n-1) + "…",
-		"first\nsecond":        "first…",
-		"ñ" + long:             "ñ" + strings.Repeat("a", n-2) + "…",
-	} {
-		if got := cellText(in); got != want {
-			t.Errorf("cellText(%q) = %q, want %q", in, got, want)
-		}
 	}
 }

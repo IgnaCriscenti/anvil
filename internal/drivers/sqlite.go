@@ -159,3 +159,34 @@ func (SQLite) Placeholder(int) string { return "?" }
 func (SQLite) SplitStatements(sql string) []Span { return sqliteDialect.split(sql) }
 
 func (SQLite) Analyze(stmt string) Statement { return sqliteDialect.analyze(stmt) }
+
+// AutoIncrement makes the column an alias of the rowid, which must be
+// declared as INTEGER PRIMARY KEY.
+func (SQLite) AutoIncrement(string) (string, bool) { return "INTEGER PRIMARY KEY AUTOINCREMENT", true }
+
+func (SQLite) CreateDatabase(string) string { return "" }
+
+// CreateSQLiteFile creates an empty SQLite database at path. If the file
+// already exists it is left as is and created is false.
+func CreateSQLiteFile(ctx context.Context, path string) (created bool, err error) {
+	if _, err := os.Stat(path); err == nil {
+		return false, nil
+	}
+	dsn, err := sqliteDSN(path, "rwc")
+	if err != nil {
+		return false, err
+	}
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return false, err
+	}
+	defer db.Close()
+	// The file is written on the first change to the database.
+	if _, err := db.ExecContext(ctx, "PRAGMA user_version = 0"); err != nil {
+		return false, err
+	}
+	if _, err := os.Stat(path); err != nil {
+		return false, err
+	}
+	return true, nil
+}

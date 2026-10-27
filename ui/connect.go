@@ -6,6 +6,7 @@ import (
 
 	"github.com/Watts-Argentina/anvil/internal/drivers"
 	"github.com/Watts-Argentina/anvil/models"
+	"github.com/Watts-Argentina/anvil/ui/components"
 	"github.com/go-gui-org/go-gui/gui"
 )
 
@@ -112,10 +113,12 @@ func toggleDatabase(w *gui.Window, key dbKey) {
 	if _, loaded := a.Tables[key]; loaded {
 		return
 	}
-	loadTables(w, key)
+	loadTables(w, key, nil)
 }
 
-func loadTables(w *gui.Window, key dbKey) {
+// loadTables reads the tables of a database; then, if set, runs after they
+// are loaded.
+func loadTables(w *gui.Window, key dbKey, then func(w *gui.Window, tables []drivers.Table)) {
 	a := appOf(w)
 	s, ok := a.Sessions.Get(key.ConnID)
 	if !ok {
@@ -134,6 +137,9 @@ func loadTables(w *gui.Window, key dbKey) {
 			return
 		}
 		a.Tables[key] = tables
+		if then != nil {
+			then(w, tables)
+		}
 	})
 }
 
@@ -156,7 +162,7 @@ func promptPassword(w *gui.Window, c models.DBConn, msg string) {
 	w.Dialog(gui.DialogCfg{
 		ID:         "password-prompt",
 		DialogType: gui.DialogCustom,
-		Title:      "Connect to " + c.Name,
+		Title:      "Connect to " + components.Ellipsis(c.Name, 20),
 		Width:      380,
 		FocusID:    "pp-password",
 		CustomView: func(w *gui.Window) gui.View {
@@ -164,8 +170,9 @@ func promptPassword(w *gui.Window, c models.DBConn, msg string) {
 			t := gui.CurrentTheme()
 			content := []gui.View{
 				gui.Text(gui.TextCfg{
-					Text:      fmt.Sprintf("Password for %s@%s", f.Conn.User, f.Conn.Host),
+					Text:      fmt.Sprintf("Password for %s on %s", components.Ellipsis(f.Conn.User, 36), components.Ellipsis(f.Conn.Host, 36)),
 					TextStyle: t.TextStyleSecondary,
+					Mode:      gui.TextModeWrap,
 				}),
 				gui.Input(gui.InputCfg{
 					ID:         "pp-password",
@@ -179,39 +186,19 @@ func promptPassword(w *gui.Window, c models.DBConn, msg string) {
 				}),
 			}
 			if f.Error != "" {
-				content = append(content, gui.Text(gui.TextCfg{Text: f.Error, Mode: gui.TextModeWrap, TextStyle: t.TextStyleError}))
+				content = append(content, components.ErrorText(f.Error))
 			}
-			content = append(content, gui.Row(gui.ContainerCfg{
-				Sizing:     gui.FillFit,
-				Padding:    gui.NoPadding,
-				Spacing:    gui.SpacingSmall,
-				SizeBorder: gui.NoBorder,
-				HAlign:     gui.HAlignEnd,
-				Content: []gui.View{
-					gui.Button(gui.ButtonCfg{
-						ID:    "pp-cancel",
-						Label: "Cancel",
-						OnClick: func(ctx gui.EventCtx) {
-							ctx.Window.DialogDismiss()
-							ctx.Consume()
-						},
-					}),
-					gui.Button(gui.ButtonCfg{
-						ID:       "pp-connect",
-						Label:    "Connect",
-						Variant:  gui.ButtonPrimary,
-						Disabled: f.Busy,
-						OnClick:  submit,
-					}),
-				},
-			}))
-			return gui.Column(gui.ContainerCfg{
-				Sizing:     gui.FillFit,
-				Padding:    gui.NoPadding,
-				Spacing:    gui.SpacingMedium,
-				SizeBorder: gui.NoBorder,
-				Content:    content,
-			})
+			content = append(content, components.DialogButtons(
+				components.DismissButton("pp-cancel", "Cancel", gui.ButtonSecondary),
+				gui.Button(gui.ButtonCfg{
+					ID:       "pp-connect",
+					Label:    "Connect",
+					Variant:  gui.ButtonPrimary,
+					Disabled: f.Busy,
+					OnClick:  submit,
+				}),
+			))
+			return components.DialogBody(content...)
 		},
 	})
 }

@@ -5,6 +5,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Watts-Argentina/anvil/internal/editing"
+	"github.com/Watts-Argentina/anvil/ui/components"
 	"github.com/go-gui-org/go-gui/gui"
 )
 
@@ -133,7 +134,7 @@ func dataGrid(a *App, tv *tableView) gui.View {
 	for r := range res.Rows {
 		rows = append(rows, pageRow(tv, st, r, edit))
 	}
-	return gridTable("data-grid", rows, &d.gridSize)
+	return components.GridTable("data-grid", rows, &d.gridSize)
 }
 
 // pageRow is a row read from the database, with its pending changes.
@@ -175,7 +176,7 @@ func pageRow(tv *tableView, st *dataStyles, r int, edit bool) gui.TableRowCfg {
 		// cell has another one.
 		if fk, ok := tv.fkOf(col.Name); ok && !orig.Null && !changed {
 			row := res.Rows[r]
-			cell = withButton(cell, cellButton(gui.ScopeIDN("data-grid", "link", r*len(res.Columns)+c),
+			cell = components.WithButton(cell, components.CellButton(gui.ScopeIDN("data-grid", "link", r*len(res.Columns)+c),
 				"link", "Open in "+fk.RefTable.Name, st.accent, func(w *gui.Window) { followFK(w, tv, fk, row) }))
 		}
 		if edit {
@@ -227,7 +228,7 @@ func (st *dataStyles) editedCell(v editing.Value) gui.TableCellCfg {
 	if v.Null {
 		return gui.TableCellCfg{Value: "NULL", TextStyle: modified(st.null)}
 	}
-	return gui.TableCellCfg{Value: cellText(v.Text), TextStyle: modified(gui.CurrentTheme().TextStyleDef)}
+	return gui.TableCellCfg{Value: components.CellText(v.Text), TextStyle: modified(gui.CurrentTheme().TextStyleDef)}
 }
 
 // editCell is the input of the cell being edited. Enter or leaving the cell
@@ -237,7 +238,7 @@ func editCell(tv *tableView, ref cellRef) gui.TableCellCfg {
 	gen := e.Gen
 	current := func() bool { cur := tv.Data.Edit; return cur.Active && cur.Gen == gen }
 
-	width := cellText(e.Text) + buttonRoom
+	width := components.CellText(e.Text) + components.ButtonRoom
 	if n := utf8.RuneCountInString(width); n < editMinChars {
 		width += strings.Repeat(" ", 2*(editMinChars-n))
 	}

@@ -38,9 +38,9 @@ type sqlEditor struct {
 
 	// Sizes measured in the previous frame: go-edit needs a fixed width
 	// and height, and the grid a bounded height.
-	editorSize boxSize
-	gridSize   boxSize
-	bodySize   boxSize
+	editorSize components.BoxSize
+	gridSize   components.BoxSize
+	bodySize   components.BoxSize
 }
 
 func (ed *sqlEditor) close() {
@@ -135,21 +135,14 @@ func sqlTab(w *gui.Window, a *App, key dbKey) gui.View {
 		},
 	})
 
-	toolbar := gui.Row(gui.ContainerCfg{
-		Sizing:     gui.FillFit,
-		Padding:    gui.PadVH(4, 4),
-		Spacing:    gui.SpacingSmall,
-		SizeBorder: gui.NoBorder,
-		VAlign:     gui.VAlignMiddle,
-		Content: []gui.View{
-			runBtn,
-			stopBtn,
-			gui.Text(gui.TextCfg{Text: "Ctrl+Enter runs the selection or the statement under the cursor", TextStyle: t.TextStyleCaption}),
-			gui.Row(gui.ContainerCfg{Sizing: gui.FillFit, Padding: gui.NoPadding, SizeBorder: gui.NoBorder}),
-			components.Icon("database", 12),
-			gui.Text(gui.TextCfg{Text: dbLabel, TextStyle: t.TextStyleCaption}),
-		},
-	})
+	toolbar := components.Toolbar("",
+		runBtn,
+		stopBtn,
+		gui.Text(gui.TextCfg{Text: "Ctrl+Enter runs the selection or the statement under the cursor", TextStyle: t.TextStyleCaption}),
+		components.Spacer(),
+		components.Icon("database", 12),
+		gui.Text(gui.TextCfg{Text: dbLabel, TextStyle: t.TextStyleCaption}),
+	)
 
 	editor := edit.Editor(edit.EditorCfg{
 		ID:               ed.ID,
@@ -181,7 +174,7 @@ func sqlTab(w *gui.Window, a *App, key dbKey) gui.View {
 			toolbar,
 			// No gui.Splitter: nested inside the sidebar splitter it doubles the
 			// row height of gui.Table (go-gui v0.92).
-			measuredBox("sql-body", &ed.bodySize, false, gui.Column(gui.ContainerCfg{
+			components.MeasuredBox("sql-body", &ed.bodySize, false, gui.Column(gui.ContainerCfg{
 				Sizing:     gui.FillFill,
 				Padding:    gui.NoPadding,
 				Spacing:    gui.SpacingSmall,
@@ -192,7 +185,7 @@ func sqlTab(w *gui.Window, a *App, key dbKey) gui.View {
 						Sizing:     gui.FillFixed,
 						Padding:    gui.NoPadding,
 						SizeBorder: gui.NoBorder,
-						Content:    []gui.View{measuredBox(ed.ID+"-pane", &ed.editorSize, true, editor)},
+						Content:    []gui.View{components.MeasuredBox(ed.ID+"-pane", &ed.editorSize, true, editor)},
 					}),
 					sqlResults(w, a, key, ed),
 				},
@@ -388,7 +381,7 @@ func sqlResults(w *gui.Window, a *App, key dbKey, ed *sqlEditor) gui.View {
 	case ed.Running:
 		content = append(content, gui.Text(gui.TextCfg{Text: "Running…", TextStyle: t.TextStyleSecondary}))
 	case ed.Err != "":
-		content = append(content, gui.Text(gui.TextCfg{Text: ed.Err, Mode: gui.TextModeWrap, TextStyle: t.TextStyleError}))
+		content = append(content, components.ErrorText(ed.Err))
 	}
 
 	if !ed.Running && ed.Page != nil {

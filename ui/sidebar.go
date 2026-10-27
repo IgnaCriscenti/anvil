@@ -21,9 +21,6 @@ func engineLabel(engine string) string {
 	return engine
 }
 
-// Indentation of each level of the sidebar tree.
-const indent = 16
-
 func sidebar(w *gui.Window, a *App) gui.View {
 	t := gui.CurrentTheme()
 
@@ -43,50 +40,12 @@ func sidebar(w *gui.Window, a *App) gui.View {
 		ID:         "sidebar",
 		Sizing:     gui.FillFill,
 		Scrollable: true,
+		ScrollMode: gui.ScrollVerticalOnly,
 		Padding:    gui.PaddingSmall,
 		Spacing:    gui.SpacingTight,
 		SizeBorder: gui.NoBorder,
 		Color:      t.ColorPanel,
 		Content:    content,
-	})
-}
-
-func chevronIcon(expanded bool) gui.View {
-	if expanded {
-		return components.Icon("chevronDown", 12)
-	}
-	return components.Icon("chevronRight", 12)
-}
-
-// treeRow is a clickable sidebar row.
-func treeRow(id string, level int, selected bool, onClick func(gui.EventCtx), content ...gui.View) gui.View {
-	t := gui.CurrentTheme()
-	color := gui.Color{}
-	if selected {
-		color = t.ColorSelect
-	}
-	return gui.Row(gui.ContainerCfg{
-		ID:         id,
-		Sizing:     gui.FillFit,
-		Padding:    gui.NewPadding(3, 4, 3, 4+float32(level*indent)),
-		Spacing:    gui.SpacingSmall,
-		SizeBorder: gui.NoBorder,
-		Radius:     gui.RadiusSmall,
-		Color:      color,
-		VAlign:     gui.VAlignMiddle,
-		Hover:      gui.HoverStyle{Color: t.ColorHover, Cursor: gui.CursorPointingHand},
-		OnClick:    onClick,
-		Content:    content,
-	})
-}
-
-func treeColumn(items []gui.View) gui.View {
-	return gui.Column(gui.ContainerCfg{
-		Sizing:     gui.FillFit,
-		Padding:    gui.NoPadding,
-		Spacing:    gui.SpacingTight,
-		SizeBorder: gui.NoBorder,
-		Content:    items,
 	})
 }
 
@@ -102,7 +61,7 @@ func connectionItem(a *App, c models.DBConn) gui.View {
 		nameStyle = t.TextStyleSecondary
 	}
 
-	header := treeRow(gui.ScopeID(scope, "row"), 0, a.Selected == id,
+	header := components.TreeRow(gui.ScopeID(scope, "row"), 0, a.Selected == id,
 		func(ctx gui.EventCtx) {
 			a := appOf(ctx.Window)
 			if a.Selected == id {
@@ -115,9 +74,9 @@ func connectionItem(a *App, c models.DBConn) gui.View {
 			a.Selected = id
 			ctx.Consume()
 		},
-		chevronIcon(expanded),
+		components.Chevron(expanded),
 		components.ColorDot(c.Color, 10),
-		gui.Text(gui.TextCfg{Text: c.Name, TextStyle: nameStyle}),
+		components.TreeLabel(c.Name, nameStyle),
 		gui.Text(gui.TextCfg{Text: engineLabel(c.Engine), TextStyle: t.TextStyleCaption}),
 	)
 
@@ -128,17 +87,26 @@ func connectionItem(a *App, c models.DBConn) gui.View {
 	items := []gui.View{header}
 	if !s.AllDatabases() {
 		items = append(items, tableList(a, c, dbKey{ConnID: id}, scope, 1)...)
-		return treeColumn(items)
+		return components.TreeColumn(items)
 	}
 
+	items = append(items, components.TreeIndented(1, components.IconButton("plus", "New database", gui.ButtonCfg{
+		ID:       gui.ScopeID(scope, "new-db"),
+		Variant:  gui.ButtonGhost,
+		Disabled: c.ReadOnly,
+		OnClick: func(ctx gui.EventCtx) {
+			openNewDatabase(ctx.Window, id)
+			ctx.Consume()
+		},
+	})))
 	dbs := a.Databases[id]
 	if len(dbs) == 0 {
-		items = append(items, treeHint("No databases.", 1))
+		items = append(items, components.TreeHint("No databases.", 1))
 	}
 	for n, name := range dbs {
 		items = append(items, databaseItem(a, c, name, gui.ScopeIDN(scope, "db", n))...)
 	}
-	return treeColumn(items)
+	return components.TreeColumn(items)
 }
 
 // databaseItem is a server database and, if expanded, its tables.
@@ -147,21 +115,21 @@ func databaseItem(a *App, c models.DBConn, name, scope string) []gui.View {
 	key := dbKey{ConnID: c.ID, Database: name}
 	expanded := a.DBExpanded[key]
 
-	items := []gui.View{treeRow(gui.ScopeID(scope, "row"), 1, false,
+	items := []gui.View{components.TreeRow(gui.ScopeID(scope, "row"), 1, false,
 		func(ctx gui.EventCtx) {
 			appOf(ctx.Window).Selected = key.ConnID
 			toggleDatabase(ctx.Window, key)
 			ctx.Consume()
 		},
-		chevronIcon(expanded),
+		components.Chevron(expanded),
 		components.Icon("database", 12),
-		gui.Text(gui.TextCfg{Text: name, TextStyle: t.TextStyleBodySmall}),
+		components.TreeLabel(name, t.TextStyleBodySmall),
 	)}
 	if !expanded {
 		return items
 	}
 	if a.Loading[key] {
-		return append(items, treeHint("Loading tables…", 2))
+		return append(items, components.TreeHint("Loading tables…", 2))
 	}
 	return append(items, tableList(a, c, key, scope, 2)...)
 }
@@ -169,20 +137,34 @@ func databaseItem(a *App, c models.DBConn, name, scope string) []gui.View {
 // tableList is the filter and flat table list of a database.
 func tableList(a *App, c models.DBConn, key dbKey, scope string, level int) []gui.View {
 	items := []gui.View{
-		gui.Row(gui.ContainerCfg{
+		components.TreeIndented(level, gui.Row(gui.ContainerCfg{
 			Sizing:     gui.FillFit,
-			Padding:    gui.NewPadding(0, 0, 0, float32(level*indent)),
+			Padding:    gui.NoPadding,
+			Spacing:    gui.SpacingTight,
 			SizeBorder: gui.NoBorder,
-			Content: []gui.View{gui.Input(gui.InputCfg{
-				ID:          gui.ScopeID(scope, "filter"),
-				Sizing:      gui.FillFit,
-				Text:        a.Filter[key],
-				Placeholder: "Filter tables…",
-				OnTextChanged: func(text string, ctx gui.EventCtx) {
-					appOf(ctx.Window).Filter[key] = text
-				},
-			})},
-		}),
+			VAlign:     gui.VAlignMiddle,
+			Content: []gui.View{
+				gui.Input(gui.InputCfg{
+					ID:          gui.ScopeID(scope, "filter"),
+					Sizing:      gui.FillFit,
+					Text:        a.Filter[key],
+					Placeholder: "Filter tables…",
+					OnTextChanged: func(text string, ctx gui.EventCtx) {
+						appOf(ctx.Window).Filter[key] = text
+					},
+				}),
+				components.IconButton("plus", "", gui.ButtonCfg{
+					ID:       gui.ScopeID(scope, "new-table"),
+					Variant:  gui.ButtonGhost,
+					Disabled: c.ReadOnly,
+					A11YCfg:  gui.A11YCfg{A11YLabel: "New table"},
+					OnClick: func(ctx gui.EventCtx) {
+						openNewTable(ctx.Window, key)
+						ctx.Consume()
+					},
+				}),
+			},
+		})),
 	}
 
 	filter := strings.ToLower(a.Filter[key])
@@ -199,7 +181,7 @@ func tableList(a *App, c models.DBConn, key dbKey, scope string, level int) []gu
 		if filter != "" {
 			msg = "No tables match the filter."
 		}
-		items = append(items, treeHint(msg, level))
+		items = append(items, components.TreeHint(msg, level))
 	}
 	return items
 }
@@ -213,21 +195,12 @@ func tableItem(a *App, c models.DBConn, key dbKey, tb drivers.Table, id string, 
 	}
 	selected := a.Table != nil && a.Table.Key == key && a.Table.Table == tb
 
-	return treeRow(id, level, selected,
+	return components.TreeRow(id, level, selected,
 		func(ctx gui.EventCtx) {
 			openTable(ctx.Window, key, tb)
 			ctx.Consume()
 		},
 		components.Icon(tableIcon(tb), 12),
-		gui.Text(gui.TextCfg{Text: label, TextStyle: t.TextStyleBodySmall}),
+		components.TreeLabel(label, t.TextStyleBodySmall),
 	)
-}
-
-func treeHint(msg string, level int) gui.View {
-	t := gui.CurrentTheme()
-	return gui.Row(gui.ContainerCfg{
-		Padding:    gui.NewPadding(2, 4, 2, 4+float32(level*indent)),
-		SizeBorder: gui.NoBorder,
-		Content:    []gui.View{gui.Text(gui.TextCfg{Text: msg, TextStyle: t.TextStyleCaption})},
-	})
 }

@@ -68,7 +68,7 @@ func topMenu(a *App) gui.View {
 				},
 			}),
 			connectBtn,
-			gui.Row(gui.ContainerCfg{Sizing: gui.FillFit, Padding: gui.NoPadding, SizeBorder: gui.NoBorder}),
+			components.Spacer(),
 			components.IconButton(themeIcon, "", gui.ButtonCfg{
 				ID:      "top-theme",
 				Variant: gui.ButtonGhost,

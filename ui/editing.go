@@ -10,6 +10,7 @@ import (
 	"github.com/Watts-Argentina/anvil/internal/drivers"
 	"github.com/Watts-Argentina/anvil/internal/editing"
 	"github.com/Watts-Argentina/anvil/internal/query"
+	"github.com/Watts-Argentina/anvil/ui/components"
 	"github.com/go-gui-org/go-gui/gui"
 )
 
@@ -350,57 +351,22 @@ func reviewSave(w *gui.Window, tv *tableView, then func(w *gui.Window)) {
 					TextStyle: t.TextStyleSecondary,
 					Mode:      gui.TextModeWrap,
 				}),
-				gui.Column(gui.ContainerCfg{
-					ID:          "save-sql",
-					Sizing:      gui.FillFit,
-					MaxHeight:   320,
-					Scrollable:  true,
-					Padding:     gui.PaddingSmall,
-					Color:       t.ColorInterior,
-					ColorBorder: t.ColorBorder,
-					SizeBorder:  gui.BorderThin,
-					Radius:      gui.RadiusSmall,
-					Content: []gui.View{gui.Text(gui.TextCfg{
-						Text:      strings.Join(lines, "\n"),
-						TextStyle: t.TextStyleCodeSmall,
-						Mode:      gui.TextModeWrap,
-					})},
-				}),
+				sqlPreview("save-sql", strings.Join(lines, "\n")),
 			}
 			if tv.Data.SaveErr != "" {
-				content = append(content, gui.Text(gui.TextCfg{Text: tv.Data.SaveErr, Mode: gui.TextModeWrap, TextStyle: t.TextStyleError}))
+				content = append(content, components.ErrorText(tv.Data.SaveErr))
 			}
-			content = append(content, gui.Row(gui.ContainerCfg{
-				Sizing:     gui.FillFit,
-				Padding:    gui.NoPadding,
-				Spacing:    gui.SpacingSmall,
-				SizeBorder: gui.NoBorder,
-				HAlign:     gui.HAlignEnd,
-				Content: []gui.View{
-					gui.Button(gui.ButtonCfg{
-						ID:    "save-cancel",
-						Label: "Cancel",
-						OnClick: func(ctx gui.EventCtx) {
-							ctx.Window.DialogDismiss()
-							ctx.Consume()
-						},
-					}),
-					gui.Button(gui.ButtonCfg{
-						ID:       "save-confirm",
-						Label:    "Save",
-						Variant:  gui.ButtonPrimary,
-						Disabled: tv.Data.Saving,
-						OnClick:  save,
-					}),
-				},
-			}))
-			return gui.Column(gui.ContainerCfg{
-				Sizing:     gui.FillFit,
-				Padding:    gui.NoPadding,
-				Spacing:    gui.SpacingMedium,
-				SizeBorder: gui.NoBorder,
-				Content:    content,
-			})
+			content = append(content, components.DialogButtons(
+				components.DismissButton("save-cancel", "Cancel", gui.ButtonSecondary),
+				gui.Button(gui.ButtonCfg{
+					ID:       "save-confirm",
+					Label:    "Save",
+					Variant:  gui.ButtonPrimary,
+					Disabled: tv.Data.Saving,
+					OnClick:  save,
+				}),
+			))
+			return components.DialogBody(content...)
 		},
 	})
 }
@@ -450,57 +416,37 @@ func leaveTable(w *gui.Window, tv *tableView, chain bool, then func(w *gui.Windo
 		FocusID:    "unsaved-cancel",
 		CustomView: func(w *gui.Window) gui.View {
 			t := gui.CurrentTheme()
-			return gui.Column(gui.ContainerCfg{
-				Sizing:     gui.FillFit,
-				Padding:    gui.NoPadding,
-				Spacing:    gui.SpacingMedium,
-				SizeBorder: gui.NoBorder,
-				Content: []gui.View{
-					gui.Text(gui.TextCfg{
-						Text:      fmt.Sprintf("%s has %d unsaved changes.", dirty.Table.Name, dirty.Data.Pending.Len()),
-						TextStyle: t.TextStyleSecondary,
-						Mode:      gui.TextModeWrap,
-					}),
-					gui.Row(gui.ContainerCfg{
-						Sizing:     gui.FillFit,
-						Padding:    gui.NoPadding,
-						Spacing:    gui.SpacingSmall,
-						SizeBorder: gui.NoBorder,
-						HAlign:     gui.HAlignEnd,
-						Content: []gui.View{
-							gui.Button(gui.ButtonCfg{
-								ID:    "unsaved-cancel",
-								Label: "Cancel",
-								OnClick: func(ctx gui.EventCtx) {
-									ctx.Window.DialogDismiss()
-									ctx.Consume()
-								},
-							}),
-							gui.Button(gui.ButtonCfg{
-								ID:      "unsaved-discard",
-								Label:   "Discard",
-								Variant: gui.ButtonDanger,
-								OnClick: func(ctx gui.EventCtx) {
-									ctx.Consume()
-									ctx.Window.DialogDismiss()
-									discardChanges(dirty)
-									leaveTable(ctx.Window, tv, chain, then)
-								},
-							}),
-							gui.Button(gui.ButtonCfg{
-								ID:      "unsaved-save",
-								Label:   "Save…",
-								Variant: gui.ButtonPrimary,
-								OnClick: func(ctx gui.EventCtx) {
-									ctx.Consume()
-									// The review dialog replaces this one.
-									reviewSave(ctx.Window, dirty, func(w *gui.Window) { leaveTable(w, tv, chain, then) })
-								},
-							}),
+			return components.DialogBody(
+				gui.Text(gui.TextCfg{
+					Text:      fmt.Sprintf("%s has %d unsaved changes.", dirty.Table.Name, dirty.Data.Pending.Len()),
+					TextStyle: t.TextStyleSecondary,
+					Mode:      gui.TextModeWrap,
+				}),
+				components.DialogButtons(
+					components.DismissButton("unsaved-cancel", "Cancel", gui.ButtonSecondary),
+					gui.Button(gui.ButtonCfg{
+						ID:      "unsaved-discard",
+						Label:   "Discard",
+						Variant: gui.ButtonDanger,
+						OnClick: func(ctx gui.EventCtx) {
+							ctx.Consume()
+							ctx.Window.DialogDismiss()
+							discardChanges(dirty)
+							leaveTable(ctx.Window, tv, chain, then)
 						},
 					}),
-				},
-			})
+					gui.Button(gui.ButtonCfg{
+						ID:      "unsaved-save",
+						Label:   "Save…",
+						Variant: gui.ButtonPrimary,
+						OnClick: func(ctx gui.EventCtx) {
+							ctx.Consume()
+							// The review dialog replaces this one.
+							reviewSave(ctx.Window, dirty, func(w *gui.Window) { leaveTable(w, tv, chain, then) })
+						},
+					}),
+				),
+			)
 		},
 	})
 }
@@ -537,48 +483,27 @@ func confirmClose(w *gui.Window) {
 		FocusID:    "close-keep",
 		CustomView: func(w *gui.Window) gui.View {
 			t := gui.CurrentTheme()
-			return gui.Column(gui.ContainerCfg{
-				Sizing:     gui.FillFit,
-				Padding:    gui.NoPadding,
-				Spacing:    gui.SpacingMedium,
-				SizeBorder: gui.NoBorder,
-				Content: []gui.View{
-					gui.Text(gui.TextCfg{
-						Text: fmt.Sprintf("%s has %d unsaved changes. If you close Anvil they are lost.",
-							strings.Join(tables, ", "), n),
-						TextStyle: t.TextStyleSecondary,
-						Mode:      gui.TextModeWrap,
-					}),
-					gui.Row(gui.ContainerCfg{
-						Sizing:     gui.FillFit,
-						Padding:    gui.NoPadding,
-						Spacing:    gui.SpacingSmall,
-						SizeBorder: gui.NoBorder,
-						HAlign:     gui.HAlignEnd,
-						Content: []gui.View{
-							gui.Button(gui.ButtonCfg{
-								ID:      "close-keep",
-								Label:   "Keep editing",
-								Variant: gui.ButtonPrimary,
-								OnClick: func(ctx gui.EventCtx) {
-									ctx.Window.DialogDismiss()
-									ctx.Consume()
-								},
-							}),
-							gui.Button(gui.ButtonCfg{
-								ID:      "close-discard",
-								Label:   "Discard and close",
-								Variant: gui.ButtonDanger,
-								OnClick: func(ctx gui.EventCtx) {
-									ctx.Window.DialogDismiss()
-									ctx.Window.Close()
-									ctx.Consume()
-								},
-							}),
+			return components.DialogBody(
+				gui.Text(gui.TextCfg{
+					Text: fmt.Sprintf("%s has %d unsaved changes. If you close Anvil they are lost.",
+						strings.Join(tables, ", "), n),
+					TextStyle: t.TextStyleSecondary,
+					Mode:      gui.TextModeWrap,
+				}),
+				components.DialogButtons(
+					components.DismissButton("close-keep", "Keep editing", gui.ButtonPrimary),
+					gui.Button(gui.ButtonCfg{
+						ID:      "close-discard",
+						Label:   "Discard and close",
+						Variant: gui.ButtonDanger,
+						OnClick: func(ctx gui.EventCtx) {
+							ctx.Window.DialogDismiss()
+							ctx.Window.Close()
+							ctx.Consume()
 						},
 					}),
-				},
-			})
+				),
+			)
 		},
 	})
 }

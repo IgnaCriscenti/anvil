@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"github.com/Watts-Argentina/anvil/ui/components"
 	"github.com/go-gui-org/go-gui/gui"
 )
 
@@ -65,7 +66,7 @@ func statusBar(a *App) gui.View {
 		VAlign:     gui.VAlignMiddle,
 		Content: []gui.View{
 			gui.Text(gui.TextCfg{Text: active, TextStyle: t.TextStyleCaption}),
-			gui.Row(gui.ContainerCfg{Sizing: gui.FillFit, Padding: gui.NoPadding, SizeBorder: gui.NoBorder}),
+			components.Spacer(),
 			gui.Text(gui.TextCfg{Text: a.Status, TextStyle: t.TextStyleCaption}),
 		},
 	})

@@ -211,7 +211,7 @@ func structureTab(tv *tableView) gui.View {
 	case tv.Loading:
 		body = gui.Text(gui.TextCfg{Text: "Loading columns…", TextStyle: t.TextStyleSecondary})
 	case tv.Err != "":
-		body = gui.Text(gui.TextCfg{Text: tv.Err, Mode: gui.TextModeWrap, TextStyle: t.TextStyleError})
+		body = components.ErrorText(tv.Err)
 	default:
 		body = columnsTable(tv)
 	}
@@ -253,7 +253,7 @@ func columnsTable(tv *tableView) gui.View {
 			{Value: c.Name}, {Value: c.DBType}, {Value: null}, {Value: key},
 		}})
 	}
-	return gui.Table(gridStyle(gui.TableCfg{
+	return gui.Table(components.GridStyle(gui.TableCfg{
 		ID:   "structure-table",
 		Data: rows,
 	}))

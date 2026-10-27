@@ -25,6 +25,9 @@ type Driver interface {
     QuoteIdent(s string) string
     Placeholder(n int) string // n starts at 1
     SplitStatements(sql string) []Span
+    Analyze(stmt string) Statement
+    AutoIncrement(typ string) (def string, inlinePK bool) // DDL of an auto-increment PK column (SPEC §3.5)
+    CreateDatabase(name string) string                   // "" for SQLite
 }
 type Table struct { Schema, Name string; IsView bool }
 type Column struct { Name, DBType string; Nullable, PK, AutoInc bool; PKOrdinal int }
@@ -55,6 +58,12 @@ A single registry `drivers.For(engine string) (Driver, error)`; no `switch engin
 - After opening: `PingContext` with a 10 s timeout (Test connection button, SPEC §3.3).
 - Read-only + several statements in the same session ⇒ run on a dedicated `*sql.Conn` (`db.Conn(ctx)`), not
   on the pool, so `SET`/`BEGIN` apply to the same connection.
+
+## DDL (SPEC §3.5)
+
+`internal/schema` builds `CREATE TABLE` / `CREATE DATABASE`; the per-engine bits live in the driver
+(`AutoIncrement`, `CreateDatabase`), never in a `switch engine`. `drivers.CreateSQLiteFile` creates an empty
+database file (`mode=rwc` + a write) and never touches an existing one.
 
 ## All databases (SPEC §3.4)
 

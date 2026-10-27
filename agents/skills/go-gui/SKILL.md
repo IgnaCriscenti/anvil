@@ -42,7 +42,7 @@ Local references (copied from the go-gui repo, MIT license in `references/GO-GUI
 | Sidebar + central area layout (§4)      | `gui.Splitter` (`view_splitter.go`), `Row`/`Column`       | `examples/dock_layout`, `explorer`   |
 | Table / SQL tabs (§4)                   | `gui.TabControl` (`view_tab_control.go`)                  | `examples/showcase`                  |
 | Table list with filter (§4)             | `gui.ListBox` or a virtual list                           | `examples/listbox`, `virtual_list`   |
-| Data grid (§6, §7)                      | `gui.Table` with per-cell `TextStyle`/`Content`/`OnClick` (`gridTable`, `dataGrid`); **not** `datagrid` (see below) | `ui/dataGrid.go` |
+| Data grid (§6, §7)                      | `gui.Table` with per-cell `TextStyle`/`Content`/`OnClick` (`components.GridTable`, `dataGrid`); **not** `datagrid` (see below) | `ui/dataGrid.go` |
 | Connection modal / confirmations        | `w.Dialog(gui.DialogCfg{...})` (`view_dialog.go`), `DialogConfirm` or `DialogCustom`. Anvil uses in-window dialogs (`leaveTable`, `confirmClose`), not `NativeSaveDiscardDialog` (needs a native platform) | `examples/dialogs` |
 | Window close with unsaved changes (§7.2) | `WindowCfg.OnCloseRequest`; the hook calls `w.Close()` to proceed | `ui/start.go` |
 | Date / time editing (§6.4)              | `gui.DatePicker` (days only) + `gui.Input` with `Mask: "99:99:99"` | `ui/dateEditor.go`, `examples/date_picker_options` |
@@ -67,7 +67,7 @@ Anvil's grids are `gui.Table` (see "Lessons learned"). Notes kept for reference:
 
 - **`gui.Table` borders**: `SizeBorder` defaults to 0 and is applied as is, so `BorderStyle` alone draws
   nothing. There is no header color: anvil paints row 0 as "selected" (`Selected{0: true}` +
-  `Colors.Selected`). Use `gridStyle` in `ui/resultGrid.go` for every data table.
+  `Colors.Selected`). Use `components.GridStyle` (`ui/components/grid.go`) for every data table.
 - **Clipped horizontal scroll**: a `Scrollable` container caches `contentW` before a Fit `gui.Table` takes its
   final width, and `layoutAdjustScrollOffsets` clips the offset to that stale value (the last columns become
   unreachable). Fix: measure the natural width (`naturalWidth`) in `AmendLayout` and pass it as the table's
@@ -78,7 +78,7 @@ Anvil's grids are `gui.Table` (see "Lessons learned"). Notes kept for reference:
   `GridCellFormat` cannot be built from outside). Give it a bounded height (measured `Height`) so it
   virtualizes; truncate long values because columns are sized from the text.
 - **Widgets in `gui.Table` cells**: `TableCellCfg.Content` replaces the text, but column widths are still
-  measured from `Value`; pad `Value` to make room for the widget (see `linkCell` in `ui/resultGrid.go`).
+  measured from `Value`; pad `Value` to make room for the widget (see `components.WithButton` and `ButtonRoom`).
 - **`TableCellCfg.ID` is not applied** to the cell (v0.92): a test cannot click a cell by ID. Put IDs on
   the widgets inside the cell, or call the handler directly.
 - **Cell styles**: `TextStyle.BgColor` highlights the text (modified cells) and `Strikethrough` crosses it
@@ -90,7 +90,7 @@ Anvil's grids are `gui.Table` (see "Lessons learned"). Notes kept for reference:
 - **Dates**: `gui.DatePicker` is a calendar for days only (no time); its visible month lives in window state
   keyed by ID, so reset it with `w.DatePickerReset(id)`. Day cells are `ScopeIDN(id, "day", d)`. A time field
   is an `Input` with `Mask: "99:99:99"`.
-- **Fixed sizes**: `measuredBox` (`ui/resultGrid.go`) measures a panel in `AmendLayout` and re-lays out if it
+- **Fixed sizes**: `components.MeasuredBox` (`ui/components/grid.go`) measures a panel in `AmendLayout` and re-lays out if it
   changed; the go-edit editor (needs `Width`/`Height`) and the grid use it.
 - **go-edit**: custom actions with `EditorCfg.Actions` + `Keymaps`; `ActionFunc` uses an unexported type, so it
   is declared generic (`func runAction[S any](cfg, st *S, buf, w)`) and `Cursors` are read through reflection.
@@ -99,11 +99,20 @@ Anvil's grids are `gui.Table` (see "Lessons learned"). Notes kept for reference:
   installs the text measurer (without it `gui.Table` uses default widths); `w.FrameFn()` drains the
   `QueueCommand` queue (`TestRender` does not).
 
+- **Overflow**: a single-line `Text` cannot shrink below its measured width, so a long value widens
+  its whole column (and the dialog or sidebar with it). Wrap it in a `FillFit` `Row` with `Clip: true`
+  (`components.TreeLabel`), as go-gui's Combobox does. Dialog titles are single-line: cut user values with
+  `components.Ellipsis`. A long list inside a dialog goes in a `Scrollable` column with `MaxHeight`.
+  `TestNoOverflow` (`ui/overflow_test.go`) opens every dialog with long values and fails if a shape sticks
+  out of a non-scrolling ancestor; add new dialogs to it. Without `soft.RenderToImage` the headless widths
+  are not the real ones and overflow goes unnoticed.
+
 ## Icons
 
 - Own SVGs in `assets/icons/*.svg`, embedded; `assets.GetIconData(name)` reads `icons/<name>.svg`.
 - The SVGs use `stroke="currentColor"`. go-gui leaves `currentColor` as an almost transparent sentinel color if `SvgCfg.Color` is not set → **always pass `Color`** with the active theme's text color, and regenerate when the theme changes.
 - Reuse `ui/components.Icon` / `IconButton`; do not duplicate SVG loading.
+- Other shared widgets live in `ui/components/`: `Spacer`, `Toolbar`, `Separator`, `ErrorText` (layout.go), `DialogBody`, `DialogButtons`, `DismissButton` (dialog.go), `FormField`, `ColorPicker` (form.go), `TreeRow`, `TreeColumn`, `TreeHint`, `TreeIndented`, `Chevron` (tree.go), grid helpers (grid.go). Components never import `internal/*` or read `App`; they take values and callbacks.
 
 ## Verification
 

@@ -47,6 +47,8 @@ type App struct {
 	editorSeq int
 	Form      connForm
 	Pending   string // password in the connect prompt
+	NewTable  tableForm
+	NewDB     databaseForm
 
 	SidebarRatio  float32
 	KeyringWarned bool

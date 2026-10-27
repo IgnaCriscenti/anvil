@@ -34,6 +34,14 @@ type Driver interface {
 	Placeholder(n int) string
 	SplitStatements(sql string) []Span
 	Analyze(stmt string) Statement
+	// AutoIncrement returns the definition, after the column name, of an
+	// auto-increment primary key column of type typ. inlinePK reports that
+	// the definition already declares the primary key (SQLite).
+	AutoIncrement(typ string) (def string, inlinePK bool)
+	// CreateDatabase returns the statement that creates database name, or
+	// "" if the engine has no server databases (SQLite: the file is the
+	// database).
+	CreateDatabase(name string) string
 }
 
 type Table struct {

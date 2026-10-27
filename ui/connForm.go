@@ -63,20 +63,6 @@ func openConnForm(w *gui.Window, c models.DBConn) {
 	})
 }
 
-func formField(label string, field gui.View) gui.View {
-	t := gui.CurrentTheme()
-	return gui.Column(gui.ContainerCfg{
-		Sizing:     gui.FillFit,
-		Padding:    gui.NoPadding,
-		Spacing:    gui.SpacingTight,
-		SizeBorder: gui.NoBorder,
-		Content: []gui.View{
-			gui.Text(gui.TextCfg{Text: label, TextStyle: t.TextStyleLabel}),
-			field,
-		},
-	})
-}
-
 func formInput(id, text, placeholder string, onChange func(*connForm, string)) gui.View {
 	return gui.Input(gui.InputCfg{
 		ID:          id,
@@ -105,9 +91,9 @@ func connFormView(w *gui.Window) gui.View {
 	}
 
 	fields := []gui.View{
-		formField("Name", formInput("cf-name", c.Name, "My database", func(f *connForm, s string) { f.Conn.Name = s })),
-		formField("Color", colorPicker(c.Color)),
-		formField("Engine", gui.Select(gui.SelectCfg{
+		components.FormField("Name", formInput("cf-name", c.Name, "My database", func(f *connForm, s string) { f.Conn.Name = s })),
+		components.FormField("Color", colorPicker(c.Color)),
+		components.FormField("Engine", gui.Select(gui.SelectCfg{
 			ID:       "cf-engine",
 			Sizing:   gui.FillFit,
 			Items:    engineLabels,
@@ -130,7 +116,7 @@ func connFormView(w *gui.Window) gui.View {
 	}
 
 	if c.Engine == models.EngineSQLite {
-		fields = append(fields, formField("Database file", gui.Row(gui.ContainerCfg{
+		fields = append(fields, components.FormField("Database file", gui.Row(gui.ContainerCfg{
 			Sizing:     gui.FillFit,
 			Padding:    gui.NoPadding,
 			Spacing:    gui.SpacingSmall,
@@ -145,6 +131,14 @@ func connFormView(w *gui.Window) gui.View {
 						ctx.Consume()
 					},
 				}),
+				gui.Button(gui.ButtonCfg{
+					ID:    "cf-new-file",
+					Label: "New…",
+					OnClick: func(ctx gui.EventCtx) {
+						newSQLiteFile(ctx.Window)
+						ctx.Consume()
+					},
+				}),
 			},
 		})))
 	} else {
@@ -155,10 +149,10 @@ func connFormView(w *gui.Window) gui.View {
 				Spacing:    gui.SpacingMedium,
 				SizeBorder: gui.NoBorder,
 				Content: []gui.View{
-					formField("Host", formInput("cf-host", c.Host, "localhost", func(f *connForm, s string) { f.Conn.Host = s })),
+					components.FormField("Host", formInput("cf-host", c.Host, "localhost", func(f *connForm, s string) { f.Conn.Host = s })),
 					gui.Column(gui.ContainerCfg{
 						Width: 110, Sizing: gui.FixedFit, Padding: gui.NoPadding, SizeBorder: gui.NoBorder,
-						Content: []gui.View{formField("Port", gui.Input(gui.InputCfg{
+						Content: []gui.View{components.FormField("Port", gui.Input(gui.InputCfg{
 							ID:              "cf-port",
 							Sizing:          gui.FillFit,
 							NoMinWidthFloor: true,
@@ -180,8 +174,8 @@ func connFormView(w *gui.Window) gui.View {
 					}),
 				},
 			}),
-			formField("User", formInput("cf-user", c.User, "postgres", func(f *connForm, s string) { f.Conn.User = s })),
-			formField("Password", gui.Input(gui.InputCfg{
+			components.FormField("User", formInput("cf-user", c.User, "postgres", func(f *connForm, s string) { f.Conn.User = s })),
+			components.FormField("Password", gui.Input(gui.InputCfg{
 				ID:          "cf-password",
 				Sizing:      gui.FillFit,
 				Text:        f.Password,
@@ -201,14 +195,14 @@ func connFormView(w *gui.Window) gui.View {
 					ctx.Consume()
 				},
 			}),
-			formField("Database", formInput("cf-db", c.DB, "All databases", func(f *connForm, s string) { f.Conn.DB = s })),
-			formField("SSL mode", sslSelect(c)),
+			components.FormField("Database", formInput("cf-db", c.DB, "All databases", func(f *connForm, s string) { f.Conn.DB = s })),
+			components.FormField("SSL mode", sslSelect(c)),
 		)
 		if needsSSLFiles(c) {
 			fields = append(fields,
-				formField("CA certificate", formInput("cf-ssl-ca", c.SSLCA, "/path/to/ca.pem", func(f *connForm, s string) { f.Conn.SSLCA = s })),
-				formField("Client certificate", formInput("cf-ssl-cert", c.SSLCert, "Optional", func(f *connForm, s string) { f.Conn.SSLCert = s })),
-				formField("Client key", formInput("cf-ssl-key", c.SSLKey, "Optional", func(f *connForm, s string) { f.Conn.SSLKey = s })),
+				components.FormField("CA certificate", formInput("cf-ssl-ca", c.SSLCA, "/path/to/ca.pem", func(f *connForm, s string) { f.Conn.SSLCA = s })),
+				components.FormField("Client certificate", formInput("cf-ssl-cert", c.SSLCert, "Optional", func(f *connForm, s string) { f.Conn.SSLCert = s })),
+				components.FormField("Client key", formInput("cf-ssl-key", c.SSLKey, "Optional", func(f *connForm, s string) { f.Conn.SSLKey = s })),
 			)
 		}
 	}
@@ -225,7 +219,7 @@ func connFormView(w *gui.Window) gui.View {
 	}))
 
 	if f.Error != "" {
-		fields = append(fields, gui.Text(gui.TextCfg{Text: f.Error, Mode: gui.TextModeWrap, TextStyle: t.TextStyleError}))
+		fields = append(fields, components.ErrorText(f.Error))
 	}
 	if f.Info != "" {
 		fields = append(fields, gui.Text(gui.TextCfg{Text: f.Info, Mode: gui.TextModeWrap, TextStyle: t.TextStyleSuccess}))
@@ -246,15 +240,8 @@ func connFormView(w *gui.Window) gui.View {
 					ctx.Consume()
 				},
 			}),
-			gui.Row(gui.ContainerCfg{Sizing: gui.FillFit, Padding: gui.NoPadding, SizeBorder: gui.NoBorder}),
-			gui.Button(gui.ButtonCfg{
-				ID:    "cf-cancel",
-				Label: "Cancel",
-				OnClick: func(ctx gui.EventCtx) {
-					ctx.Window.DialogDismiss()
-					ctx.Consume()
-				},
-			}),
+			components.Spacer(),
+			components.DismissButton("cf-cancel", "Cancel", gui.ButtonSecondary),
 			gui.Button(gui.ButtonCfg{
 				ID:       "cf-save",
 				Label:    "Save",
@@ -316,33 +303,8 @@ func sslSelect(c models.DBConn) gui.View {
 }
 
 func colorPicker(selected string) gui.View {
-	t := gui.CurrentTheme()
-	swatches := make([]gui.View, 0, len(connColors))
-	for i, hex := range connColors {
-		border := gui.Color{}
-		if hex == selected {
-			border = t.TextStyleDef.Color
-		}
-		swatches = append(swatches, gui.Row(gui.ContainerCfg{
-			ID:          gui.ScopeIDN("cf-color", "", i),
-			Padding:     gui.PadAll(2),
-			SizeBorder:  gui.BorderThin,
-			ColorBorder: border,
-			Radius:      gui.RadiusSmall,
-			Hover:       gui.HoverStyle{Cursor: gui.CursorPointingHand},
-			A11YCfg:     gui.A11YCfg{A11YLabel: "Color " + hex},
-			OnClick: func(ctx gui.EventCtx) {
-				appOf(ctx.Window).Form.Conn.Color = hex
-				ctx.Consume()
-			},
-			Content: []gui.View{components.ColorDot(hex, 16)},
-		}))
-	}
-	return gui.Row(gui.ContainerCfg{
-		Padding:    gui.NoPadding,
-		Spacing:    gui.SpacingSmall,
-		SizeBorder: gui.NoBorder,
-		Content:    swatches,
+	return components.ColorPicker("cf-color", connColors, selected, func(hex string, ctx gui.EventCtx) {
+		appOf(ctx.Window).Form.Conn.Color = hex
 	})
 }
 
@@ -359,6 +321,43 @@ func browseSQLite(w *gui.Window) {
 					appOf(w).Form.Conn.DB = paths[0]
 				}
 			}
+		},
+	})
+}
+
+// newSQLiteFile asks where to save a new SQLite database and creates the
+// empty file. An existing file is used as is, never overwritten.
+func newSQLiteFile(w *gui.Window) {
+	w.NativeSaveDialog(gui.NativeSaveDialogCfg{
+		Title:            "New SQLite database",
+		DefaultName:      "database.db",
+		DefaultExtension: "db",
+		Filters: []gui.NativeFileFilter{
+			{Name: "SQLite databases", Extensions: []string{"db", "sqlite", "sqlite3", "db3"}},
+		},
+		OnDone: func(r gui.NativeDialogResult, w *gui.Window) {
+			paths := r.PathStrings()
+			if r.Status != gui.DialogOK || len(paths) == 0 {
+				return
+			}
+			path := paths[0]
+			f := &appOf(w).Form
+			f.Busy, f.Error, f.Info = true, "", ""
+			async(w, func(ctx context.Context) (bool, error) {
+				return drivers.CreateSQLiteFile(ctx, path)
+			}, func(w *gui.Window, created bool, err error) {
+				f := &appOf(w).Form
+				f.Busy = false
+				if err != nil {
+					f.Error = errText(appErrors.Error("Database file not created.", err.Error(), err))
+					return
+				}
+				f.Conn.DB = path
+				f.Info = "Created an empty database file."
+				if !created {
+					f.Info = "The file already exists: it is opened as is."
+				}
+			})
 		},
 	})
 }
@@ -421,6 +420,16 @@ func saveConnection(w *gui.Window) {
 			w.Toast(gui.ToastCfg{Title: "Connection updated", Body: "Reconnect to apply the changes."})
 		}
 	})
+}
+
+// errDescription returns the AppError's description (the message
+// otherwise).
+func errDescription(err error) string {
+	var ae *appErrors.AppError
+	if errors.As(err, &ae) {
+		return ae.Description
+	}
+	return err.Error()
 }
 
 // errText summarizes an error to show it inline.

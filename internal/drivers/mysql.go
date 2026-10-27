@@ -194,3 +194,7 @@ func (MySQL) Placeholder(int) string { return "?" }
 func (MySQL) SplitStatements(sql string) []Span { return mysqlDialect.split(sql) }
 
 func (MySQL) Analyze(stmt string) Statement { return mysqlDialect.analyze(stmt) }
+
+func (MySQL) AutoIncrement(typ string) (string, bool) { return typ + " AUTO_INCREMENT", false }
+
+func (d MySQL) CreateDatabase(name string) string { return "CREATE DATABASE " + d.QuoteIdent(name) }

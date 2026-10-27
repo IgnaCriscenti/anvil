@@ -5,6 +5,7 @@ import (
 
 	"github.com/Watts-Argentina/anvil/internal/drivers"
 	"github.com/Watts-Argentina/anvil/internal/editing"
+	"github.com/Watts-Argentina/anvil/ui/components"
 	"github.com/go-gui-org/go-gui/gui"
 )
 
@@ -44,7 +45,8 @@ func openDateEditor(w *gui.Window, tv *tableView, ref cellRef, col drivers.Colum
 	w.Dialog(gui.DialogCfg{
 		ID:         "date-editor",
 		DialogType: gui.DialogCustom,
-		Title:      col.Name,
+		Title:      components.Ellipsis(col.Name, 24),
+		Width:      360,
 		FocusID:    focus,
 		CustomView: func(w *gui.Window) gui.View { return dateEditorView(tv, kind) },
 	})
@@ -96,7 +98,7 @@ func dateEditorView(tv *tableView, kind editing.Temporal) gui.View {
 		}))
 	}
 	if de.Err != "" {
-		content = append(content, gui.Text(gui.TextCfg{Text: de.Err, TextStyle: t.TextStyleError, Mode: gui.TextModeWrap}))
+		content = append(content, components.ErrorText(de.Err))
 	}
 
 	buttons := []gui.View{
@@ -126,15 +128,8 @@ func dateEditorView(tv *tableView, kind editing.Temporal) gui.View {
 		}))
 	}
 	buttons = append(buttons,
-		gui.Row(gui.ContainerCfg{Sizing: gui.FillFit, Padding: gui.NoPadding, SizeBorder: gui.NoBorder}),
-		gui.Button(gui.ButtonCfg{
-			ID:    "date-cancel",
-			Label: "Cancel",
-			OnClick: func(ctx gui.EventCtx) {
-				ctx.Window.DialogDismiss()
-				ctx.Consume()
-			},
-		}),
+		components.Spacer(),
+		components.DismissButton("date-cancel", "Cancel", gui.ButtonSecondary),
 		gui.Button(gui.ButtonCfg{
 			ID:      "date-ok",
 			Label:   "OK",
@@ -154,13 +149,7 @@ func dateEditorView(tv *tableView, kind editing.Temporal) gui.View {
 		Content:    buttons,
 	}))
 
-	return gui.Column(gui.ContainerCfg{
-		Sizing:     gui.FillFit,
-		Padding:    gui.NoPadding,
-		Spacing:    gui.SpacingMedium,
-		SizeBorder: gui.NoBorder,
-		Content:    content,
-	})
+	return components.DialogBody(content...)
 }
 
 // applyDate records the chosen date and time as the cell's pending value.
