@@ -107,6 +107,10 @@ Anvil's grids are `gui.Table` (see "Lessons learned"). Notes kept for reference:
   out of a non-scrolling ancestor; add new dialogs to it. Without `soft.RenderToImage` the headless widths
   are not the real ones and overflow goes unnoticed.
 
+- **Headless screenshots of the SQL tab**: go-edit keeps the text measurer of the first `soft` render, so
+  render that window once (a second `RenderToImage`/`RenderToPNG` panics in go-glyph). README screenshots:
+  `ANVIL_README_SHOTS=docs/screenshots go test ./ui/ -run TestReadmeScreenshots` (`ui/readme_test.go`).
+
 ## Icons
 
 - Own SVGs in `assets/icons/*.svg`, embedded; `assets.GetIconData(name)` reads `icons/<name>.svg`.
