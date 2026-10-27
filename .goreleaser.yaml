@@ -1,0 +1,55 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+
+project_name: anvil
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: anvil
+    main: .
+    binary: anvil
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    goos: [linux, windows, darwin]
+    goarch: [amd64, arm64]
+    overrides:
+      # Sin consola en Windows (equivale al -H=windowsgui del makefile)
+      - goos: windows
+        goarch: amd64
+        ldflags: ["-s -w -X main.version={{.Version}} -H=windowsgui"]
+      - goos: windows
+        goarch: arm64
+        ldflags: ["-s -w -X main.version={{.Version}} -H=windowsgui"]
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}-{{ .Version }}-{{ .Os }}-{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: SHA256SUMS
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  # Tags como v0.5.0-beta o v1.0.0-rc1 se marcan como pre-release automáticamente
+  prerelease: auto
