@@ -198,3 +198,9 @@ func (MySQL) Analyze(stmt string) Statement { return mysqlDialect.analyze(stmt) 
 func (MySQL) AutoIncrement(typ string) (string, bool) { return typ + " AUTO_INCREMENT", false }
 
 func (d MySQL) CreateDatabase(name string) string { return "CREATE DATABASE " + d.QuoteIdent(name) }
+
+func (MySQL) Limit(orderBy, limit, offset string) string { return limitOffset(orderBy, limit, offset) }
+
+func (MySQL) InsertDefaults(table string, _ []Column) string {
+	return "INSERT INTO " + table + " () VALUES ()"
+}

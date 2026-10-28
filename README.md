@@ -8,7 +8,7 @@ edit data safely: every change is previewed as SQL and saved in a single transac
 
 |              |                                                     |
 |--------------|-----------------------------------------------------|
-| **Engines**  | SQLite, PostgreSQL, MySQL / MariaDB                 |
+| **Engines**  | SQLite, PostgreSQL, MySQL / MariaDB, SQL Server, Oracle (12c+) |
 | **Platforms**| Linux (X11 / Wayland), Windows, macOS               |
 | **License**  | MIT                                                 |
 
@@ -31,11 +31,14 @@ edit data safely: every change is previewed as SQL and saved in a single transac
   sidebar.
 - **Passwords in the system keyring** (service `ANVIL-DBM`). Without a keyring the password is not stored
   and is asked for on connect.
-- **SSL/TLS** for PostgreSQL and MySQL: mode, CA, client certificate and key.
-- **All databases**: leave the database empty in PostgreSQL or MySQL and every database on the server is
-  listed; each one expands to show its tables.
-- **Read-only** connections: the grid cannot be edited, the SQL editor rejects writes and the session is
-  read-only on the server too.
+- **SSL/TLS** for PostgreSQL and MySQL: mode, CA, client certificate and key. Encryption mode for SQL
+  Server (`false` encrypts only the login, `trust` skips certificate verification) and SSL for Oracle.
+- **All databases**: leave the database empty in PostgreSQL, MySQL or SQL Server and every database on the
+  server is listed; each one expands to show its tables.
+- **SQL Server**: named instances as `host\INSTANCE`. **Oracle**: the database is the service name
+  (required) and the tables shown are those of the user's schema.
+- **Read-only** connections: the grid cannot be edited, the SQL editor rejects writes and, in PostgreSQL and
+  MySQL, the session is read-only on the server too.
 
 ### Browse
 
@@ -64,7 +67,7 @@ edit data safely: every change is previewed as SQL and saved in a single transac
 
 - **New table** (the `+` next to the table filter): name, type, nullable, primary key, auto-increment and
   default per column, with a live preview of the `CREATE TABLE` for the engine.
-- **New database** on PostgreSQL and MySQL connections without a database.
+- **New database** on PostgreSQL, MySQL and SQL Server connections without a database.
 - **New…** in the SQLite connection form creates an empty database file.
 
 ### Run SQL
@@ -155,15 +158,22 @@ go vet ./...
 go test ./...
 ```
 
-Tests against real PostgreSQL and MySQL servers are skipped unless these variables are set (five
-space-separated fields). With Docker, throwaway servers are enough:
+Tests against real PostgreSQL, MySQL, SQL Server and Oracle servers are skipped unless these variables are
+set (five space-separated fields; for Oracle the last one is the service). With Docker, throwaway servers
+are enough:
 
 ```sh
 docker run -d --rm --name anvil-pg -e POSTGRES_PASSWORD=anvil -p 127.0.0.1:55432:5432 postgres:18-alpine
 docker run -d --rm --name anvil-my -e MYSQL_ROOT_PASSWORD=anvil -e MYSQL_DATABASE=anvil -p 127.0.0.1:53306:3306 mysql:8.4
+docker run -d --rm --name anvil-ms -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD=Anvil_Test_1 -p 127.0.0.1:51433:1433 mcr.microsoft.com/mssql/server:2022-latest
+docker run -d --rm --name anvil-ora -e ORACLE_PASSWORD=anvil -e APP_USER=anvil -e APP_USER_PASSWORD=anvil -p 127.0.0.1:51521:1521 gvenzl/oracle-free:23-slim
+# Once SQL Server is up, create the test database:
+docker exec anvil-ms /opt/mssql-tools18/bin/sqlcmd -C -U sa -P Anvil_Test_1 -Q "CREATE DATABASE anvil"
 ANVIL_TEST_PG="127.0.0.1 55432 postgres anvil postgres" \
-ANVIL_TEST_MYSQL="127.0.0.1 53306 root anvil anvil" go test -count=1 ./...
-docker rm -f anvil-pg anvil-my
+ANVIL_TEST_MYSQL="127.0.0.1 53306 root anvil anvil" \
+ANVIL_TEST_MSSQL="127.0.0.1 51433 sa Anvil_Test_1 anvil" \
+ANVIL_TEST_ORACLE="127.0.0.1 51521 anvil anvil FREEPDB1" go test -count=1 ./...
+docker rm -f anvil-pg anvil-my anvil-ms anvil-ora
 ```
 
 UI tests run headless with go-gui's software renderer. They check for duplicate IDs, missing handlers and

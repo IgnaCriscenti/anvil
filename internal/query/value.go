@@ -86,6 +86,9 @@ func convert(v any, dbType string) Value {
 		return Value{Null: true}
 	case []byte:
 		b := append([]byte(nil), x...)
+		if dbType == "UNIQUEIDENTIFIER" && len(b) == 16 {
+			return Value{Text: guid(b), Raw: b}
+		}
 		if IsBinaryType(dbType) || !utf8.Valid(b) {
 			return Value{Blob: true, Text: blobSummary(b), Raw: b}
 		}
@@ -93,7 +96,9 @@ func convert(v any, dbType string) Value {
 	case string:
 		return Value{Text: x, Raw: x}
 	case time.Time:
-		if dbType == "DATE" {
+		// An Oracle DATE also has a time of day: only midnight is shown as
+		// a date.
+		if dbType == "DATE" && x.Hour() == 0 && x.Minute() == 0 && x.Second() == 0 && x.Nanosecond() == 0 {
 			return Value{Text: x.Format(dateLayout), Raw: x}
 		}
 		return Value{Text: x.Format(timeLayout), Raw: x}
@@ -122,7 +127,14 @@ func convert(v any, dbType string) Value {
 // IsBinaryType reports whether an (upper-case) engine type is binary.
 func IsBinaryType(dbType string) bool {
 	return strings.Contains(dbType, "BLOB") || strings.Contains(dbType, "BYTEA") ||
-		strings.Contains(dbType, "BINARY")
+		strings.Contains(dbType, "BINARY") || dbType == "IMAGE" || strings.HasSuffix(dbType, "RAW")
+}
+
+// guid formats a SQL Server uniqueidentifier, whose first three groups are
+// little-endian.
+func guid(b []byte) string {
+	return fmt.Sprintf("%X-%X-%X-%X-%X",
+		[]byte{b[3], b[2], b[1], b[0]}, []byte{b[5], b[4]}, []byte{b[7], b[6]}, b[8:10], b[10:])
 }
 
 // blobSummary builds "<BLOB 1.2 KB> 0a1b2c…".

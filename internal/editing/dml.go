@@ -63,10 +63,7 @@ func (t Target) build(c Change) (Statement, error) {
 		}
 		sql := "INSERT INTO " + table + " (" + strings.Join(cols, ", ") + ") VALUES (" + strings.Join(vals, ", ") + ")"
 		if len(cols) == 0 {
-			sql = "INSERT INTO " + table + " DEFAULT VALUES"
-			if _, mysql := d.(drivers.MySQL); mysql {
-				sql = "INSERT INTO " + table + " () VALUES ()"
-			}
+			sql = d.InsertDefaults(table, t.Columns)
 		}
 		return Statement{SQL: sql, Args: args, Change: c, Label: label}, nil
 
@@ -134,13 +131,13 @@ func (t Target) where(row int, ph func(any) string) (string, error) {
 }
 
 // Comparable reports whether a column can identify a row without a PK:
-// binary, JSON, XML, geometric and floating point columns are left out.
+// binary, JSON, XML, LOB, geometric and floating point columns are left out.
 func Comparable(c drivers.Column) bool {
 	t := strings.ToLower(c.DBType)
 	if query.IsBinaryType(strings.ToUpper(t)) {
 		return false
 	}
-	for _, s := range []string{"json", "xml", "point", "line", "lseg", "box", "path", "polygon", "circle", "geometry", "float", "real", "double"} {
+	for _, s := range []string{"json", "xml", "point", "line", "lseg", "box", "path", "polygon", "circle", "geometry", "geography", "float", "real", "double", "clob", "ntext", "image", "sql_variant"} {
 		if strings.Contains(t, s) {
 			return false
 		}
@@ -151,14 +148,20 @@ func Comparable(c drivers.Column) bool {
 // arg is the parameter for a value: nil for NULL, the text otherwise.
 // MySQL does not accept the offset that the grid shows in dates
 // ("… +00:00"), so its dates are sent in UTC without it, the same way the
-// connection reads them.
+// connection reads them. SQL Server and Oracle do not convert ISO 8601
+// text reliably (Oracle depends on NLS_DATE_FORMAT): they get a time.Time.
 func (t Target) arg(col drivers.Column, v Value) any {
 	if v.Null {
 		return nil
 	}
-	if _, mysql := t.Driver.(drivers.MySQL); mysql {
+	switch t.Driver.(type) {
+	case drivers.MySQL:
 		if tm, ok := ParseTemporal(col.DBType, v.Text); ok {
 			return tm.UTC().Format(mysqlLayouts[TemporalKind(col.DBType)])
+		}
+	case drivers.MSSQL, drivers.Oracle:
+		if tm, ok := ParseTemporal(col.DBType, v.Text); ok {
+			return tm
 		}
 	}
 	return v.Text
@@ -167,14 +170,14 @@ func (t Target) arg(col drivers.Column, v Value) any {
 // Preview returns the statement with its arguments inlined, only to show
 // it: it always runs with parameters.
 func (s Statement) Preview(d drivers.Driver) string {
-	quote := d.QuoteIdent("")[:1] // the identifier quote, skipped while scanning
+	quote := d.QuoteIdent("") // the identifier quotes, skipped while scanning
 	var b strings.Builder
 	sql, next := s.SQL, 0
 	for i := 0; i < len(sql); i++ {
 		ch := sql[i]
 		switch {
 		case ch == quote[0]:
-			end := strings.IndexByte(sql[i+1:], ch)
+			end := strings.IndexByte(sql[i+1:], quote[1])
 			if end < 0 {
 				end = len(sql) - i - 1
 			}
@@ -183,7 +186,11 @@ func (s Statement) Preview(d drivers.Driver) string {
 		case ch == '?':
 			b.WriteString(literal(s.Args, next))
 			next++
-		case ch == '$' && i+1 < len(sql) && sql[i+1] >= '0' && sql[i+1] <= '9':
+		case (ch == '$' || ch == ':') && i+1 < len(sql) && sql[i+1] >= '0' && sql[i+1] <= '9',
+			ch == '@' && strings.HasPrefix(sql[i+1:], "p") && i+2 < len(sql) && sql[i+2] >= '0' && sql[i+2] <= '9':
+			if ch == '@' {
+				i++ // @pN
+			}
 			j := i + 1
 			for j < len(sql) && sql[j] >= '0' && sql[j] <= '9' {
 				j++

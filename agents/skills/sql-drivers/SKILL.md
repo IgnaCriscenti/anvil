@@ -6,7 +6,8 @@ description: Implementing anvil's internal/drivers — Driver interface per engi
 # Engine drivers (SPEC §2.2)
 
 Drivers: `github.com/jackc/pgx/v5/stdlib` (name `"pgx"`), `github.com/go-sql-driver/mysql`
-(`"mysql"`), `github.com/glebarez/go-sqlite` (`"sqlite"`). All without CGO. **Never** import
+(`"mysql"`), `github.com/glebarez/go-sqlite` (`"sqlite"`), `github.com/microsoft/go-mssqldb` (SQL Server,
+`mssql.NewConnector`) and `github.com/sijms/go-ora/v2` (Oracle 12c+, `goora.NewConnector`). All without CGO. **Never** import
 `modernc.org/sqlite` directly: `glebarez/sqlite` (GORM) already registers `"sqlite"` and the double registration panics.
 
 Implemented in `internal/drivers`: `driver.go` (interface, `For`, `Connect`, `Test`), `lexer.go` (lexical
@@ -27,7 +28,9 @@ type Driver interface {
     SplitStatements(sql string) []Span
     Analyze(stmt string) Statement
     AutoIncrement(typ string) (def string, inlinePK bool) // DDL of an auto-increment PK column (SPEC §3.5)
-    CreateDatabase(name string) string                   // "" for SQLite
+    CreateDatabase(name string) string                   // "" for SQLite and Oracle
+    Limit(orderBy, limit, offset string) string          // pagination clause; never write LIMIT by hand
+    InsertDefaults(table string, cols []Column) string   // INSERT of a row with only defaults
 }
 type Table struct { Schema, Name string; IsView bool }
 type Column struct { Name, DBType string; Nullable, PK, AutoInc bool; PKOrdinal int }
@@ -116,3 +119,19 @@ comments and parentheses; `WITH` is Write if it contains a top-level `INSERT/UPD
 Scan into `[]any` with `rows.ColumnTypes()`; normalize: `nil` → NULL, `[]byte` → text if it is
 text/JSON and BLOB otherwise (`DatabaseTypeName`), `time.Time` → ISO 8601 (SPEC §6.4). The conversion lives
 here or in `internal/query`, never in the UI.
+
+## SQL Server and Oracle
+
+- DSNs are built with `url.URL` (`sqlserver://`, `oracle://`), never by concatenation. SQL Server
+  `host\INSTANCE` is a named instance; SSL modes `false` (login only + trust cert), `true`, `trust`,
+  `strict`, `disable`. Oracle: `DB` is the service name (required); SSL `disable/require/verify`.
+- Placeholders: `@pN` (named, reusable) and `:N`. **go-ora binds by order of appearance, not by number**:
+  placeholders must appear in the text in numeric order (Oracle's `OFFSET` precedes `FETCH`, so the
+  table OFFSET path inlines its computed ints).
+- Neither has read-only sessions: only anvil's client-side checks apply.
+- Splitting: SQL Server `[ident]`, `GO` alone on a line ends a batch, `CREATE/ALTER PROCEDURE|FUNCTION|TRIGGER`
+  bodies are not cut at `;`. Oracle: `BEGIN`/`DECLARE`/`CREATE … PROCEDURE|FUNCTION|PACKAGE|TRIGGER|TYPE`
+  run until `/` alone on a line and keep their final `;`; `q'[…]'` strings. Analyze: PL/SQL blocks and
+  T-SQL `BEGIN` without `TRAN` are Write.
+- Oracle unquoted identifiers are upper case (`ANVIL_USERS`); `''` is NULL. Integration tests:
+  `ANVIL_TEST_MSSQL` / `ANVIL_TEST_ORACLE` (last field = service).

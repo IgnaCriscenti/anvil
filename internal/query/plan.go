@@ -19,12 +19,13 @@ type Statement struct {
 type Plan struct {
 	Statements []Statement
 	Warnings   []string
+	driver     drivers.Driver // to paginate the results
 }
 
 // NewPlan splits sql into statements and runs the pre-checks. On a
 // read-only connection it rejects everything if any statement is not a read.
 func NewPlan(d drivers.Driver, sql string, readOnly bool) (Plan, error) {
-	var p Plan
+	p := Plan{driver: d}
 	for _, span := range d.SplitStatements(sql) {
 		p.Statements = append(p.Statements, Statement{Span: span, Info: d.Analyze(span.Text)})
 	}

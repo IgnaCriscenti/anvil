@@ -30,11 +30,17 @@ var engines = []struct{ id, label string }{
 	{models.EngineSQLite, "SQLite"},
 	{models.EnginePostgres, "PostgreSQL"},
 	{models.EngineMySQL, "MySQL / MariaDB"},
+	{models.EngineMSSQL, "SQL Server"},
+	{models.EngineOracle, "Oracle"},
 }
 
 var sslModes = map[string][]string{
 	models.EnginePostgres: {"prefer", "disable", "require", "verify-ca", "verify-full"},
 	models.EngineMySQL:    {"preferred", "false", "true", "skip-verify", "custom"},
+	// SQL Server: "false" encrypts only the login, "trust" encrypts without
+	// verifying the certificate.
+	models.EngineMSSQL:  {"false", "true", "trust", "strict", "disable"},
+	models.EngineOracle: {"disable", "require", "verify"},
 }
 
 func openConnForm(w *gui.Window, c models.DBConn) {
@@ -174,7 +180,7 @@ func connFormView(w *gui.Window) gui.View {
 					}),
 				},
 			}),
-			components.FormField("User", formInput("cf-user", c.User, "postgres", func(f *connForm, s string) { f.Conn.User = s })),
+			components.FormField("User", formInput("cf-user", c.User, defaultUser(c.Engine), func(f *connForm, s string) { f.Conn.User = s })),
 			components.FormField("Password", gui.Input(gui.InputCfg{
 				ID:          "cf-password",
 				Sizing:      gui.FillFit,
@@ -195,7 +201,7 @@ func connFormView(w *gui.Window) gui.View {
 					ctx.Consume()
 				},
 			}),
-			components.FormField("Database", formInput("cf-db", c.DB, "All databases", func(f *connForm, s string) { f.Conn.DB = s })),
+			databaseField(c),
 			components.FormField("SSL mode", sslSelect(c)),
 		)
 		if needsSSLFiles(c) {
@@ -267,6 +273,29 @@ func connFormView(w *gui.Window) gui.View {
 	})
 }
 
+// defaultUser is the user placeholder: the engine's usual administrator.
+func defaultUser(engine string) string {
+	switch engine {
+	case models.EngineMySQL:
+		return "root"
+	case models.EngineMSSQL:
+		return "sa"
+	case models.EngineOracle:
+		return "system"
+	}
+	return "postgres"
+}
+
+// databaseField is the database of server engines; in Oracle, the service
+// name, which is required.
+func databaseField(c models.DBConn) gui.View {
+	label, placeholder := "Database", "All databases"
+	if c.Engine == models.EngineOracle {
+		label, placeholder = "Service name", "FREEPDB1"
+	}
+	return components.FormField(label, formInput("cf-db", c.DB, placeholder, func(f *connForm, s string) { f.Conn.DB = s }))
+}
+
 func passwordPlaceholder(c models.DBConn) string {
 	if c.ID != 0 && c.SavePassword {
 		return "Unchanged"
@@ -308,21 +337,32 @@ func colorPicker(selected string) gui.View {
 	})
 }
 
+// sqliteFilters lists the SQLite file extensions. go-gui accepts only
+// plain extensions ("*" fails the whole dialog), and the Linux pickers
+// merge every filter into one, so there is no "All files" entry.
+var sqliteFilters = []gui.NativeFileFilter{
+	{Name: "SQLite databases", Extensions: []string{"db", "sqlite", "sqlite3", "db3"}},
+}
+
 func browseSQLite(w *gui.Window) {
 	w.NativeOpenDialog(gui.NativeOpenDialogCfg{
-		Title: "Select SQLite database",
-		Filters: []gui.NativeFileFilter{
-			{Name: "SQLite databases", Extensions: []string{"db", "sqlite", "sqlite3", "db3"}},
-			{Name: "All files", Extensions: []string{"*"}},
-		},
+		Title:   "Select SQLite database",
+		Filters: sqliteFilters,
 		OnDone: func(r gui.NativeDialogResult, w *gui.Window) {
-			if r.Status == gui.DialogOK {
-				if paths := r.PathStrings(); len(paths) > 0 {
-					appOf(w).Form.Conn.DB = paths[0]
-				}
+			f := &appOf(w).Form
+			switch paths := r.PathStrings(); {
+			case r.Status == gui.DialogError:
+				f.Error, f.Info = dialogErrText(r), ""
+			case r.Status == gui.DialogOK && len(paths) > 0:
+				f.Conn.DB = paths[0]
 			}
 		},
 	})
+}
+
+// dialogErrText describes a file dialog that could not be shown.
+func dialogErrText(r gui.NativeDialogResult) string {
+	return errText(appErrors.Error("The file dialog could not be opened.", r.ErrorMessage, nil))
 }
 
 // newSQLiteFile asks where to save a new SQLite database and creates the
@@ -332,10 +372,13 @@ func newSQLiteFile(w *gui.Window) {
 		Title:            "New SQLite database",
 		DefaultName:      "database.db",
 		DefaultExtension: "db",
-		Filters: []gui.NativeFileFilter{
-			{Name: "SQLite databases", Extensions: []string{"db", "sqlite", "sqlite3", "db3"}},
-		},
+		Filters:          sqliteFilters,
 		OnDone: func(r gui.NativeDialogResult, w *gui.Window) {
+			if r.Status == gui.DialogError {
+				f := &appOf(w).Form
+				f.Error, f.Info = dialogErrText(r), ""
+				return
+			}
 			paths := r.PathStrings()
 			if r.Status != gui.DialogOK || len(paths) == 0 {
 				return

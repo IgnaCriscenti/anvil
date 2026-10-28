@@ -62,6 +62,7 @@ var dmlWords = map[string]bool{"INSERT": true, "UPDATE": true, "DELETE": true, "
 func (d dialect) analyze(stmt string) Statement {
 	var (
 		first      string
+		second     string
 		depth      int
 		hasWhere   bool
 		hasInto    bool
@@ -94,6 +95,9 @@ func (d dialect) analyze(stmt string) Statement {
 			if first == "" {
 				first = w
 				continue
+			}
+			if second == "" {
+				second = w
 			}
 			if dmlWords[w] {
 				if dml == "" {
@@ -141,6 +145,12 @@ func (d dialect) analyze(stmt string) Statement {
 		}
 	case "PRAGMA":
 		if hasEq {
+			s.Kind = KindWrite
+		}
+	case "BEGIN", "DECLARE":
+		// PL/SQL anonymous block; in T-SQL, BEGIN TRAN[SACTION] is a
+		// transaction and any other BEGIN a block.
+		if d.plsql || d.tsql && first == "BEGIN" && second != "TRAN" && second != "TRANSACTION" && second != "DISTRIBUTED" {
 			s.Kind = KindWrite
 		}
 	case "REPLACE":

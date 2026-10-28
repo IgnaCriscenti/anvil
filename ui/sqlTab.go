@@ -83,6 +83,8 @@ func lexerFor(a *App, key dbKey) string {
 		return "postgresql"
 	case models.EngineMySQL:
 		return "mysql"
+	case models.EngineMSSQL:
+		return "tsql"
 	}
 	return "sql"
 }

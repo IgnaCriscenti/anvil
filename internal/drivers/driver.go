@@ -40,8 +40,25 @@ type Driver interface {
 	AutoIncrement(typ string) (def string, inlinePK bool)
 	// CreateDatabase returns the statement that creates database name, or
 	// "" if the engine has no server databases (SQLite: the file is the
-	// database).
+	// database; Oracle: the service is).
 	CreateDatabase(name string) string
+	// Limit returns the end of a query that reads limit rows after skipping
+	// offset ("" for none): its orderBy (" ORDER BY …" or "") followed by
+	// the engine's pagination clause. SQL Server needs an ORDER BY to
+	// paginate and adds one if orderBy is empty.
+	Limit(orderBy, limit, offset string) string
+	// InsertDefaults returns the INSERT of a row with every column at its
+	// default into table (already quoted) with columns cols.
+	InsertDefaults(table string, cols []Column) string
+}
+
+// limitOffset is the LIMIT … OFFSET … clause of PG, MySQL and SQLite.
+func limitOffset(orderBy, limit, offset string) string {
+	q := orderBy + " LIMIT " + limit
+	if offset != "" {
+		q += " OFFSET " + offset
+	}
+	return q
 }
 
 type Table struct {
@@ -109,6 +126,10 @@ func For(engine string) (Driver, error) {
 		return Postgres{}, nil
 	case models.EngineMySQL:
 		return MySQL{}, nil
+	case models.EngineMSSQL:
+		return MSSQL{}, nil
+	case models.EngineOracle:
+		return Oracle{}, nil
 	}
 	return nil, appErrors.Error(
 		"Unsupported database engine.",
@@ -118,9 +139,10 @@ func For(engine string) (Driver, error) {
 }
 
 // AllDatabases reports whether the connection shows every server database:
-// server engines with no database configured.
+// server engines with no database configured. In Oracle the database is
+// the service, which is always required.
 func AllDatabases(c models.DBConn) bool {
-	return c.Engine != models.EngineSQLite && c.DB == ""
+	return c.Engine != models.EngineSQLite && c.Engine != models.EngineOracle && c.DB == ""
 }
 
 func scanStrings(rows *sql.Rows, err error) ([]string, error) {

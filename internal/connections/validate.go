@@ -30,7 +30,11 @@ func Validate(conn models.DBConn) error {
 			return invalid("Select the SQLite database file.")
 		}
 		return nil
-	case models.EnginePostgres, models.EngineMySQL:
+	case models.EngineOracle:
+		if strings.TrimSpace(conn.DB) == "" {
+			return invalid("The Oracle service name is required.")
+		}
+	case models.EnginePostgres, models.EngineMySQL, models.EngineMSSQL:
 	default:
 		return invalid(fmt.Sprintf("Unknown database engine %q.", conn.Engine))
 	}

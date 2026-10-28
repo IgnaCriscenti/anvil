@@ -16,6 +16,16 @@ type dialect struct {
 	nestedComments    bool // PG: /* /* */ */
 	delimiterCmd      bool // MySQL: DELIMITER xx
 	triggerBlocks     bool // SQLite: BEGIN ... END of CREATE TRIGGER
+	bracketIdent      bool // SQL Server: [ident]
+	qQuote            bool // Oracle: q'[...]' strings
+	plsql             bool // Oracle: BEGIN and DECLARE start PL/SQL blocks
+	tsql              bool // SQL Server: BEGIN without TRAN starts a block
+	// batchSep is a line that ends the statement even inside a block ("GO"
+	// in SQL Server, "/" in Oracle). It is not sent to the server.
+	batchSep string
+	// block reports whether a statement starting with words (upper-cased)
+	// is a routine whose body has ";": only batchSep ends it.
+	block func(words []string) bool
 }
 
 var (
@@ -25,6 +35,14 @@ var (
 		backtickIdent: true, hashComment: true, dashNeedsSpace: true,
 		backslashStrings: true, doubleQuoteString: true, execComments: true,
 		delimiterCmd: true,
+	}
+	mssqlDialect = dialect{
+		bracketIdent: true, nestedComments: true, tsql: true,
+		batchSep: "GO", block: isTSQLRoutine,
+	}
+	oracleDialect = dialect{
+		qQuote: true, plsql: true,
+		batchSep: "/", block: isPLSQLBlock,
 	}
 )
 
@@ -120,6 +138,9 @@ func (d dialect) lex(src string, i int) token {
 	case c == '`' && d.backtickIdent:
 		return token{tokIdent, i, d.quoted(src, i, '`', false)}
 
+	case c == '[' && d.bracketIdent:
+		return token{tokIdent, i, d.quoted(src, i, ']', false)}
+
 	case c == '$' && d.dollarQuote && (i == 0 || !isWordByte(src[i-1])):
 		if end, ok := dollarString(src, i); ok {
 			return token{tokString, i, end}
@@ -134,6 +155,10 @@ func (d dialect) lex(src string, i int) token {
 		// PG: E'...' allows backslash escapes.
 		if d.eStrings && j == i+1 && (c == 'e' || c == 'E') && at(j) == '\'' {
 			return token{tokString, i, d.quoted(src, j, '\'', true)}
+		}
+		// Oracle: q'[...]', nq'{...}' and so on, with any delimiter.
+		if w := strings.ToUpper(src[i:j]); d.qQuote && (w == "Q" || w == "NQ") && at(j) == '\'' && j+1 < n {
+			return token{tokString, i, qString(src, j+1)}
 		}
 		return token{tokWord, i, j}
 	}
@@ -162,6 +187,28 @@ func (d dialect) quoted(src string, i int, q byte, backslash bool) int {
 		j++
 	}
 	return n
+}
+
+// qString returns the end of an Oracle q'X…X' string whose delimiter X is
+// at src[i]: (, [, { and < close with their pair.
+func qString(src string, i int) int {
+	closer := src[i]
+	switch closer {
+	case '(':
+		closer = ')'
+	case '[':
+		closer = ']'
+	case '{':
+		closer = '}'
+	case '<':
+		closer = '>'
+	}
+	for j := i + 1; j+1 < len(src); j++ {
+		if src[j] == closer && src[j+1] == '\'' {
+			return j + 2
+		}
+	}
+	return len(src)
 }
 
 // dollarString recognizes $tag$ ... $tag$ in src[i:].

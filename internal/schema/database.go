@@ -20,7 +20,7 @@ func CreateDatabase(d drivers.Driver, name string) (string, error) {
 	stmt := d.CreateDatabase(name)
 	if stmt == "" {
 		err := errors.New("engine without server databases")
-		return "", appErrors.Error("Not supported.", "This engine has no server databases: create a new database file instead.", err)
+		return "", appErrors.Error("Not supported.", "This engine has no server databases: in SQLite create a new database file, in Oracle the service is the database.", err)
 	}
 	return stmt, nil
 }

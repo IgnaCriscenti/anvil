@@ -10,7 +10,7 @@ connect to a database, explore its tables, run SQL and edit data safely.
 |-------------|--------------------------------------------|
 | Users       | General FOSS audience (technical users)    |
 | Platforms   | Linux (X11/Wayland), Windows, macOS        |
-| Engines     | SQLite, PostgreSQL, MySQL / MariaDB        |
+| Engines     | SQLite, PostgreSQL, MySQL / MariaDB, SQL Server, Oracle 12c+ |
 
 ### 1.1 v1 scope
 
@@ -68,7 +68,8 @@ assets/              own embedded SVG icons
 
 - GORM is used **only** for the local configuration. The user's databases are queried with `database/sql`,
   because columns and types are dynamic.
-- Drivers: `jackc/pgx/v5/stdlib`, `go-sql-driver/mysql`, `glebarez/go-sqlite`.
+- Drivers (all pure Go): `jackc/pgx/v5/stdlib`, `go-sql-driver/mysql`, `glebarez/go-sqlite`,
+  `microsoft/go-mssqldb`, `sijms/go-ora/v2`.
 - The user's SQLite databases are opened with a `file:` URI (`mode=rw`, or `mode=ro` if read-only), so
   no empty file is created if the path does not exist.
 - `Driver` interface per engine:
@@ -77,12 +78,17 @@ assets/              own embedded SVG icons
   - `ListTables(ctx) ([]Table, error)`: tables and views.
   - `Columns(ctx, table) ([]Column, error)`: name, type, nullable, whether it is a PK, whether it is identity/autoincrement.
   - `ForeignKeys(ctx, table) ([]ForeignKey, error)`: name, columns, referenced table and columns (in order).
-  - `QuoteIdent(string) string`: `"x"` in PG/SQLite, `` `x` `` in MySQL.
-  - `Placeholder(n int) string`: `$n` in PG, `?` in MySQL/SQLite.
-  - `SplitStatements(sql string) []Span`: respects strings, comments, `$$` (PG) and `DELIMITER` (MySQL).
+  - `QuoteIdent(string) string`: `"x"` in PG/SQLite/Oracle, `` `x` `` in MySQL, `[x]` in SQL Server.
+  - `Placeholder(n int) string`: `$n` in PG, `?` in MySQL/SQLite, `@pN` in SQL Server, `:N` in Oracle.
+  - `SplitStatements(sql string) []Span`: respects strings, comments, `$$` (PG), `DELIMITER` (MySQL),
+    `GO` batches and routine bodies (SQL Server), `/` after PL/SQL blocks and `q'[…]'` strings (Oracle).
   - `Analyze(stmt string) Statement`: kind of statement (read/write, DML, `WHERE`, transaction control) for
     the safeguards (§8).
   - `AutoIncrement(type) (def, inlinePK)` and `CreateDatabase(name) string`: the DDL dialect (§3.5).
+  - `Limit(orderBy, limit, offset) string`: `LIMIT … OFFSET …` in PG/MySQL/SQLite, `OFFSET … ROWS FETCH
+    NEXT … ROWS ONLY` in SQL Server (which adds `ORDER BY (SELECT NULL)` if there is no order) and Oracle.
+  - `InsertDefaults(table, cols) string`: the `INSERT` of a row with only defaults (`DEFAULT VALUES`,
+    `() VALUES ()` in MySQL, `(first column) VALUES (DEFAULT)` in Oracle).
 - MySQL connections use `ClientFoundRows` so that `RowsAffected` counts the rows found, not only the changed
   ones (§7.3).
 
@@ -97,13 +103,13 @@ assets/              own embedded SVG icons
 | `gorm.Model` |          | ID, timestamps, soft delete                                 |
 | `Name`       | string   | Visible alias, required                                     |
 | `Color`      | string   | Hex (`#RRGGBB`) for the indicator in the sidebar            |
-| `Engine`     | string   | `sqlite` \| `postgres` \| `mysql`                           |
+| `Engine`     | string   | `sqlite` \| `postgres` \| `mysql` \| `mssql` \| `oracle`     |
 | `Host`       | string   | Not applicable to SQLite                                    |
-| `Port`       | int      | Defaults to 5432 / 3306                                     |
+| `Port`       | int      | Defaults to 5432 / 3306 / 1433 / 1521                       |
 | `User`       | string   | Not applicable to SQLite                                    |
-| `DB`         | string   | Database name; for SQLite it is the file path. Empty in PG/MySQL = all databases (§3.4) |
+| `DB`         | string   | Database name; for SQLite it is the file path, for Oracle the service name (required). Empty in PG/MySQL/SQL Server = all databases (§3.4) |
 | `ReadOnly`   | bool     | Blocks writes (§7)                                          |
-| `SSLMode`    | string   | PG: `disable/require/verify-ca/verify-full`; MySQL: `false/true/skip-verify/custom` |
+| `SSLMode`    | string   | PG: `disable/require/verify-ca/verify-full`; MySQL: `false/true/skip-verify/custom`; SQL Server: `false/true/trust/strict/disable`; Oracle: `disable/require/verify` |
 | `SSLCA`      | string   | Path to the CA                                              |
 | `SSLCert`    | string   | Path to the client certificate                              |
 | `SSLKey`     | string   | Path to the client key                                      |
@@ -126,11 +132,14 @@ assets/              own embedded SVG icons
 
 ### 3.4 Connection without a database (all databases)
 
-- If the `DB` field is left empty in PostgreSQL or MySQL, the connection shows **every database on the
-  server** the user can access, and each database expands to show its tables.
+- If the `DB` field is left empty in PostgreSQL, MySQL or SQL Server, the connection shows **every database
+  on the server** the user can access, and each database expands to show its tables.
   - PG: `pg_database` without templates, with `datallowconn` and the `CONNECT` privilege. The main connection
     goes to the `postgres` maintenance database (without a database, libpq would use one named after the user).
   - MySQL: `information_schema.SCHEMATA`, hiding `information_schema`, `performance_schema`, `mysql` and `sys`.
+  - SQL Server: `sys.databases` without the system ones, online and with `HAS_DBACCESS`. The main connection
+    goes to `master`.
+  - Oracle has no list: the service is the database and the tables are those of the session's schema.
 - Each database is opened in its own pool the first time it is expanded (`Session.Pool`), with the password
   that stays in memory while the connection is open. Every pool is closed on disconnect.
 
@@ -145,11 +154,12 @@ assets/              own embedded SVG icons
     arguments (`integer`, `varchar(255)`, `numeric(10, 2)`, `timestamp with time zone`, `text[]`). Defaults
     are an SQL expression (`'abc'`, `0`, `CURRENT_TIMESTAMP`) and cannot end the statement.
   - PK columns are `NOT NULL` and the PK is a table constraint. Auto increment needs the column to be the
-    only PK column and have no default: PG `GENERATED BY DEFAULT AS IDENTITY`, MySQL `AUTO_INCREMENT`,
-    SQLite `INTEGER PRIMARY KEY AUTOINCREMENT` (the declared type is replaced).
+    only PK column and have no default: PG and Oracle `GENERATED BY DEFAULT AS IDENTITY`, MySQL
+    `AUTO_INCREMENT`, SQL Server `IDENTITY(1,1)`, SQLite `INTEGER PRIMARY KEY AUTOINCREMENT` (the declared
+    type is replaced). `DEFAULT` goes before `NOT NULL` (Oracle requires that order).
   - In PG the table goes to the first schema of the `search_path` (usually `public`). After creating it,
     the database's table list is reloaded and the new table opens. Errors stay in the dialog.
-- **New database** (PG and MySQL): a **New database** button at the top of the database list of a connection
+- **New database** (PG, MySQL and SQL Server): a **New database** button at the top of the database list of a connection
   without a database (§3.4) asks for the name and runs `CREATE DATABASE` on the main pool. The list is
   reloaded and the new database expands. Disabled on read-only connections.
 - **New SQLite file**: the connection form has **New…** next to Browse…, which picks a path with the save
@@ -201,7 +211,7 @@ assets/              own embedded SVG icons
 
 - One SQL editor per database (SQL tab of each table, §4). Multiple tabs are left for later.
 - Editor: `github.com/go-gui-org/go-edit` (pure Go; selection, undo, line numbers).
-- **Syntax highlighting** with `chroma` through go-edit (lexer by engine: `postgresql`, `mysql`, `sql`;
+- **Syntax highlighting** with `chroma` through go-edit (lexer by engine: `postgresql`, `mysql`, `tsql`, `sql`;
   `github-dark` / `github` style depending on the theme).
 - **Autocompletion**: dialect keywords, table and column names of the active connection
   (cached on connect, with manual refresh).
@@ -321,6 +331,8 @@ horizontal scroll (scrollbar or Shift+wheel).
   columns it inserts the defaults.
 - MySQL does not accept the offset the grid shows in dates (`… +00:00`): dates are sent in UTC without it.
   MySQL `BOOL` is `TINYINT` (0/1).
+- SQL Server and Oracle get dates as `time.Time` (Oracle would parse text with `NLS_DATE_FORMAT`). An
+  Oracle `DATE` also has a time of day: the grid shows it unless it is midnight.
 
 ### 7.5 Editing in the Data tab
 
@@ -349,7 +361,8 @@ horizontal scroll (scrollbar or Shift+wheel).
 - **Read-only connection**: besides disabling grid editing, the SQL editor rejects statements that are not
   reads (`SELECT`, `WITH` without DML, `SHOW`, `EXPLAIN`, read `PRAGMA`s).
   In PG the session is also opened with `default_transaction_read_only = on`; in MySQL with
-  `SET SESSION TRANSACTION READ ONLY`.
+  `SET SESSION TRANSACTION READ ONLY`. SQL Server and Oracle have no read-only sessions: only anvil's checks
+  apply (SQL Server connections declare `ApplicationIntent=ReadOnly`).
 - **DELETE/UPDATE without WHERE**: when the SQL editor detects an `UPDATE` or `DELETE` without `WHERE`, it asks
   for explicit confirmation before running it.
 

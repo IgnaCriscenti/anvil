@@ -17,10 +17,14 @@ import (
 //
 //	ANVIL_TEST_PG="host port user password database"
 //	ANVIL_TEST_MYSQL="host port user password database"
+//	ANVIL_TEST_MSSQL="host port user password database"
+//	ANVIL_TEST_ORACLE="host port user password service"
 func TestServerCreate(t *testing.T) {
 	for _, tc := range []struct{ env, engine, ssl string }{
 		{"ANVIL_TEST_PG", models.EnginePostgres, "disable"},
 		{"ANVIL_TEST_MYSQL", models.EngineMySQL, "preferred"},
+		{"ANVIL_TEST_MSSQL", models.EngineMSSQL, "false"},
+		{"ANVIL_TEST_ORACLE", models.EngineOracle, "disable"},
 	} {
 		t.Run(tc.engine, func(t *testing.T) {
 			f := strings.Fields(os.Getenv(tc.env))
@@ -58,12 +62,13 @@ func testServerCreate(t *testing.T, conn models.DBConn, password string) {
 	}
 	defer db.Exec("DROP TABLE " + d.QuoteIdent(table))
 
-	if _, err := db.Exec("INSERT INTO " + d.QuoteIdent(table) + " (price) VALUES (1.5)"); err != nil {
+	q := d.QuoteIdent
+	if _, err := db.Exec("INSERT INTO " + q(table) + " (" + q("price") + ") VALUES (1.5)"); err != nil {
 		t.Fatal(err)
 	}
 	var id int
 	var name string
-	if err := db.QueryRow("SELECT id, name FROM "+d.QuoteIdent(table)).Scan(&id, &name); err != nil || id != 1 || name != "none" {
+	if err := db.QueryRow("SELECT "+q("id")+", "+q("name")+" FROM "+q(table)).Scan(&id, &name); err != nil || id != 1 || name != "none" {
 		t.Fatalf("row: %d %q %v", id, name, err)
 	}
 	cols, err := d.Columns(ctx, db, drivers.Table{Name: table})
@@ -74,6 +79,9 @@ func testServerCreate(t *testing.T, conn models.DBConn, password string) {
 		t.Fatalf("columns: %+v", cols)
 	}
 
+	if d.CreateDatabase("x") == "" {
+		return // Oracle: the service is the database
+	}
 	name = "anvil_newdb_" + suffix
 	stmt, err = CreateDatabase(d, name)
 	if err != nil {

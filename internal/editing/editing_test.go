@@ -157,6 +157,14 @@ func TestPreview(t *testing.T) {
 	if got := st.Preview(drivers.MySQL{}); got != "DELETE FROM `t` WHERE `a` = 1.5 AND `b` = 'x'" {
 		t.Fatalf("preview = %s", got)
 	}
+	st = Statement{SQL: "UPDATE [a@p1]]] SET [x] = @p1 WHERE [id] = @p2", Args: []any{"y", int64(3)}}
+	if got := st.Preview(drivers.MSSQL{}); got != "UPDATE [a@p1]]] SET [x] = 'y' WHERE [id] = 3" {
+		t.Fatalf("preview = %s", got)
+	}
+	st = Statement{SQL: `DELETE FROM "t:1" WHERE "id" = :1`, Args: []any{int64(3)}}
+	if got := st.Preview(drivers.Oracle{}); got != `DELETE FROM "t:1" WHERE "id" = 3` {
+		t.Fatalf("preview = %s", got)
+	}
 }
 
 func TestValidate(t *testing.T) {

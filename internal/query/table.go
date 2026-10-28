@@ -131,9 +131,11 @@ func loadTablePage(ctx context.Context, src TableSource, cur Page, dir Dir, size
 		case Reload:
 			index = cur.Index
 		}
+		// Inlined, not parameters: they are ints computed here, and Oracle's
+		// driver binds by order of appearance while its OFFSET goes first.
 		where, args := src.where("")
-		q := "SELECT * FROM " + table + where + src.orderBy() + " LIMIT " + ph(n+1) + " OFFSET " + ph(n+2)
-		rows, err := src.DB.QueryContext(ctx, q, append(args, size+1, index*size)...)
+		q := "SELECT * FROM " + table + where + d.Limit(src.orderBy(), strconv.Itoa(size+1), strconv.Itoa(index*size))
+		rows, err := src.DB.QueryContext(ctx, q, args...)
 		if err != nil {
 			return Page{}, err
 		}
@@ -153,19 +155,19 @@ func loadTablePage(ctx context.Context, src TableSource, cur Page, dir Dir, size
 	switch dir {
 	case First:
 		where, filter := src.where("")
-		q = "SELECT * FROM " + table + where + " ORDER BY " + k + " LIMIT " + ph(n+1)
+		q = "SELECT * FROM " + table + where + d.Limit(" ORDER BY "+k, ph(n+1), "")
 		args = append(filter, size+1)
 	case Next:
 		where, filter := src.where(k + " > " + ph(n+1))
-		q = "SELECT * FROM " + table + where + " ORDER BY " + k + " LIMIT " + ph(n+2)
+		q = "SELECT * FROM " + table + where + d.Limit(" ORDER BY "+k, ph(n+2), "")
 		args, index = append(filter, cur.last, size+1), cur.Index+1
 	case Reload:
 		where, filter := src.where(k + " >= " + ph(n+1))
-		q = "SELECT * FROM " + table + where + " ORDER BY " + k + " LIMIT " + ph(n+2)
+		q = "SELECT * FROM " + table + where + d.Limit(" ORDER BY "+k, ph(n+2), "")
 		args, index = append(filter, cur.first, size+1), cur.Index
 	case Prev:
 		where, filter := src.where(k + " < " + ph(n+1))
-		q = "SELECT * FROM " + table + where + " ORDER BY " + k + " DESC LIMIT " + ph(n+2)
+		q = "SELECT * FROM " + table + where + d.Limit(" ORDER BY "+k+" DESC", ph(n+2), "")
 		args, index = append(filter, cur.first, size), cur.Index-1
 	}
 

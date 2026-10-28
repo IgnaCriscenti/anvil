@@ -166,6 +166,12 @@ func (SQLite) AutoIncrement(string) (string, bool) { return "INTEGER PRIMARY KEY
 
 func (SQLite) CreateDatabase(string) string { return "" }
 
+func (SQLite) Limit(orderBy, limit, offset string) string { return limitOffset(orderBy, limit, offset) }
+
+func (SQLite) InsertDefaults(table string, _ []Column) string {
+	return "INSERT INTO " + table + " DEFAULT VALUES"
+}
+
 // CreateSQLiteFile creates an empty SQLite database at path. If the file
 // already exists it is left as is and created is false.
 func CreateSQLiteFile(ctx context.Context, path string) (created bool, err error) {

@@ -47,6 +47,7 @@ type RowsPage struct {
 	// (read statements). An INSERT … RETURNING is not.
 	Repeatable bool
 	wrap       bool
+	driver     drivers.Driver
 }
 
 // RunResult is the result of running a Plan.
@@ -93,7 +94,7 @@ func Run(ctx context.Context, db *sql.DB, p Plan, size int) (RunResult, error) {
 		t0 := time.Now()
 
 		if s.Info.ReturnsRows() || returning(s) {
-			page := RowsPage{SQL: s.Text, Size: size, Repeatable: s.Info.ReturnsRows(), wrap: wrappable(s)}
+			page := RowsPage{SQL: s.Text, Size: size, Repeatable: s.Info.ReturnsRows(), wrap: wrappable(s), driver: p.driver}
 			page, err = fetch(ctx, conn, page, 0)
 			if err == nil {
 				sr.HasRows, sr.Rows = true, len(page.Rows)
@@ -161,14 +162,16 @@ func returning(s Statement) bool {
 }
 
 // fetch reads page index of the statement. If wrapping it fails (for
-// example duplicate columns in MySQL), it paginates on the client.
+// example duplicate columns, or an ORDER BY in a SQL Server subquery), it
+// paginates on the client.
 func fetch(ctx context.Context, q querier, page RowsPage, index int) (RowsPage, error) {
 	page.Index = index
 	offset := index * page.Size
 
 	if page.wrap {
-		wrapped := "SELECT * FROM (" + page.SQL + ") AS anvil_q LIMIT " +
-			strconv.Itoa(page.Size+1) + " OFFSET " + strconv.Itoa(offset)
+		// No AS before the alias: Oracle does not accept it.
+		wrapped := "SELECT * FROM (" + page.SQL + ") anvil_q" +
+			page.driver.Limit("", strconv.Itoa(page.Size+1), strconv.Itoa(offset))
 		rows, err := q.QueryContext(ctx, wrapped)
 		if err == nil {
 			res, more, err := scan(rows, 0, page.Size)

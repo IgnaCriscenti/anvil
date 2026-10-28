@@ -8,6 +8,8 @@ const (
 	EngineSQLite   = "sqlite"
 	EnginePostgres = "postgres"
 	EngineMySQL    = "mysql"
+	EngineMSSQL    = "mssql"
+	EngineOracle   = "oracle"
 )
 
 type DBConn struct {
@@ -18,7 +20,7 @@ type DBConn struct {
 	Host         string `json:"host"`
 	Port         int    `json:"port"`
 	User         string `json:"user"`
-	DB           string `json:"database"` // for SQLite, the path to the file
+	DB           string `json:"database"` // for SQLite, the path to the file; for Oracle, the service name
 	ReadOnly     bool   `json:"readOnly"`
 	SSLMode      string `json:"sslMode"`
 	SSLCA        string `json:"sslCA"`
@@ -34,6 +36,10 @@ func DefaultPort(engine string) int {
 		return 5432
 	case EngineMySQL:
 		return 3306
+	case EngineMSSQL:
+		return 1433
+	case EngineOracle:
+		return 1521
 	}
 	return 0
 }

@@ -17,6 +17,10 @@ func engineLabel(engine string) string {
 		return "PostgreSQL"
 	case models.EngineMySQL:
 		return "MySQL"
+	case models.EngineMSSQL:
+		return "SQL Server"
+	case models.EngineOracle:
+		return "Oracle"
 	}
 	return engine
 }

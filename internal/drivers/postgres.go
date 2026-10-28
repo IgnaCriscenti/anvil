@@ -180,3 +180,11 @@ func (Postgres) AutoIncrement(typ string) (string, bool) {
 }
 
 func (d Postgres) CreateDatabase(name string) string { return "CREATE DATABASE " + d.QuoteIdent(name) }
+
+func (Postgres) Limit(orderBy, limit, offset string) string {
+	return limitOffset(orderBy, limit, offset)
+}
+
+func (Postgres) InsertDefaults(table string, _ []Column) string {
+	return "INSERT INTO " + table + " DEFAULT VALUES"
+}

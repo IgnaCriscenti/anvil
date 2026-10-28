@@ -53,6 +53,21 @@ func TestSplitStatements(t *testing.T) {
 			"create temp trigger t before delete on a begin select 1; end;begin;commit",
 			[]string{"create temp trigger t before delete on a begin select 1; end", "begin", "commit"}},
 		{"unterminated string", SQLite{}, "select 'abc; select 2", []string{"select 'abc; select 2"}},
+		{"mssql brackets", MSSQL{}, "select [a;]]b] from t; select 2", []string{"select [a;]]b] from t", "select 2"}},
+		{"mssql GO", MSSQL{}, "select 1\nGO\nselect 2\n  go  \nselect 3", []string{"select 1", "select 2", "select 3"}},
+		{"mssql GO in a word", MSSQL{}, "select go from t; select 2", []string{"select go from t", "select 2"}},
+		{"mssql procedure", MSSQL{},
+			"CREATE OR ALTER PROCEDURE p AS BEGIN SELECT 1; SELECT 2; END\nGO\nEXEC p;",
+			[]string{"CREATE OR ALTER PROCEDURE p AS BEGIN SELECT 1; SELECT 2; END", "EXEC p"}},
+		{"oracle plsql block", Oracle{},
+			"BEGIN\n  UPDATE t SET a = 1;\n  COMMIT;\nEND;\n/\nselect 1 from dual;",
+			[]string{"BEGIN\n  UPDATE t SET a = 1;\n  COMMIT;\nEND;", "select 1 from dual"}},
+		{"oracle procedure", Oracle{},
+			"create or replace editionable procedure p is begin null; end;\n/\nselect 2 from dual",
+			[]string{"create or replace editionable procedure p is begin null; end;", "select 2 from dual"}},
+		{"oracle q string", Oracle{}, "select q'[it's; ok]' from dual; select 2 from dual",
+			[]string{"select q'[it's; ok]' from dual", "select 2 from dual"}},
+		{"oracle division", Oracle{}, "select 4 / 2 from dual; select 2 from dual", []string{"select 4 / 2 from dual", "select 2 from dual"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -127,6 +142,13 @@ func TestAnalyze(t *testing.T) {
 		{MySQL{}, "# c\nselect 1", KindRead, "SELECT", false},
 		{MySQL{}, "start transaction", KindTx, "START", false},
 		{MySQL{}, "", KindOther, "", false},
+		{MSSQL{}, "begin tran", KindTx, "BEGIN", false},
+		{MSSQL{}, "begin transaction", KindTx, "BEGIN", false},
+		{MSSQL{}, "begin delete from t end", KindWrite, "BEGIN", false},
+		{MSSQL{}, "select [where] from t", KindRead, "SELECT", false},
+		{Oracle{}, "begin delete from t; end;", KindWrite, "BEGIN", false},
+		{Oracle{}, "declare x int; begin null; end;", KindWrite, "DECLARE", false},
+		{Oracle{}, "select * from t where a = 1", KindRead, "SELECT", true},
 	}
 	for _, tc := range cases {
 		s := tc.d.Analyze(tc.sql)
@@ -146,7 +168,31 @@ func TestQuoteAndPlaceholder(t *testing.T) {
 	if got := QualifiedName(Postgres{}, Table{Schema: "public", Name: "t"}); got != `"public"."t"` {
 		t.Error(got)
 	}
-	if (Postgres{}).Placeholder(3) != "$3" || (MySQL{}).Placeholder(3) != "?" {
+	if got := (MSSQL{}).QuoteIdent("a]b"); got != "[a]]b]" {
+		t.Error(got)
+	}
+	if (Postgres{}).Placeholder(3) != "$3" || (MySQL{}).Placeholder(3) != "?" ||
+		(MSSQL{}).Placeholder(3) != "@p3" || (Oracle{}).Placeholder(3) != ":3" {
 		t.Error("placeholder")
+	}
+}
+
+func TestLimit(t *testing.T) {
+	cases := []struct {
+		d                      Driver
+		orderBy, limit, offset string
+		want                   string
+	}{
+		{Postgres{}, " ORDER BY a", "$1", "$2", " ORDER BY a LIMIT $1 OFFSET $2"},
+		{MySQL{}, "", "10", "", " LIMIT 10"},
+		{MSSQL{}, "", "@p1", "@p2", " ORDER BY (SELECT NULL) OFFSET @p2 ROWS FETCH NEXT @p1 ROWS ONLY"},
+		{MSSQL{}, " ORDER BY a", "@p1", "", " ORDER BY a OFFSET 0 ROWS FETCH NEXT @p1 ROWS ONLY"},
+		{Oracle{}, "", "11", "20", " OFFSET 20 ROWS FETCH NEXT 11 ROWS ONLY"},
+		{Oracle{}, " ORDER BY a DESC", ":1", "", " ORDER BY a DESC FETCH NEXT :1 ROWS ONLY"},
+	}
+	for _, tc := range cases {
+		if got := tc.d.Limit(tc.orderBy, tc.limit, tc.offset); got != tc.want {
+			t.Errorf("%T: got %q, want %q", tc.d, got, tc.want)
+		}
 	}
 }

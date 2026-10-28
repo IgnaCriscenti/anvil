@@ -55,12 +55,13 @@ func CreateTable(d drivers.Driver, t Table) (string, error) {
 			pk = append(pk, name)
 			continue
 		}
+		// DEFAULT goes before NOT NULL: Oracle does not accept it after.
 		def := name + " " + typ
-		if !c.Nullable || c.PK {
-			def += " NOT NULL"
-		}
 		if v := strings.TrimSpace(c.Default); v != "" {
 			def += " DEFAULT " + v
+		}
+		if !c.Nullable || c.PK {
+			def += " NOT NULL"
 		}
 		lines = append(lines, def)
 		if c.PK {
