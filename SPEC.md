@@ -16,7 +16,8 @@ connect to a database, explore its tables, run SQL and edit data safely.
 
 Included:
 - Connection management (create, edit, delete, test, connect/disconnect).
-- Simple list of tables and views per connection.
+- Simple list of tables and views per connection, with a refresh button per connection and database.
+- Tabs in the central area: tables and SQL editors, from any connection (§4.1).
 - Creating tables (with a form) and databases (§3.5).
 - SQL editor with highlighting, autocompletion and history.
 - Paginated results grid.
@@ -27,7 +28,6 @@ Included:
 Out of scope for v1:
 - Full schema explorer (indexes, triggers, altering or dropping objects). Foreign keys are only read to navigate between rows (§6.5).
 - SSH tunnel and connection folders/groups.
-- Multiple SQL editor tabs per connection (see §5.1).
 - Specialized JSON/JSONB editor (shown and edited as text).
 - i18n (the UI stays in English) and configurable shortcuts.
 - Editing the results of arbitrary queries.
@@ -171,8 +171,9 @@ assets/              own embedded SVG icons
 
 ```
 ┌─ [+Add] [Edit] [Delete] [Disconnect] ────────────────────────────────── [☀] ┐
-│ ● prod-pg PG │ ‹ users                                                      │
-│ [Filter…] [+]│ [Structure] [Data] [SQL]                                     │
+│ ● prod-pg PG⟳│ ● users • × │ ● SQL · shop × │ ● orders ×                [<>]│
+│ [Filter…] [+]│ ‹ users                                                      │
+│              │ [Structure] [Data]                                           │
 │   users      │ ⟳ ‹ Page 1 › [100▾] rows per page     Count rows             │
 │   orders     │  # │ id │ name  │ email   │ customer_id                      │
 │ ● local.db   │  + │    │ Dora  │ DEFAULT │ DEFAULT                          │
@@ -188,20 +189,47 @@ assets/              own embedded SVG icons
 - **Sidebar**: connections with their color dot. Expanding an open connection shows a flat list of
   tables and views, with a text filter and the New table button (§3.5). If the connection has no database
   (§3.4), the databases are listed first, after a New database button, and each one expands into its table
-  list and its filter. The engine is shown at the right end of the connection row. The sidebar only scrolls
+  list and its filter. The engine is shown at the right end of the connection row.
+- **Refresh**: an open connection has a refresh button (`⟳`) at the end of its row. With a database configured
+  it reloads the table list; without one (§3.4) it reloads the database list and the tables of every database
+  already loaded (a database that is gone is dropped from the tree). Each loaded database has its own refresh
+  button that reloads its tables. The button is disabled while that list is loading; open tabs are not
+  touched. The sidebar only scrolls
   vertically: a name longer than the row is clipped, so it never widens the tree or hides the buttons.
-- **Central area**: clicking a table opens it with three tabs:
+- **Central area**: a tab bar (§4.1) above the active tab. A table tab shows the table with two views:
   - **Structure**: columns with type, nullable, PK/autoincrement and FK.
   - **Data**: paginated grid of the table (§6), with foreign key navigation (§6.5) and editing (§7) through
     the bar below the grid.
-  - **SQL**: SQL editor that runs against that table's database (§5). The editor text and its last result
-    are per database: they are kept when switching between tables of the same database.
-  The selected tab is kept when opening another table. A table opened by following a FK has a back button
+  A new table tab starts on the last view chosen. A table opened by following a FK has a back button
   (`‹`) next to its name.
-- **Status bar**: active connection, query status, time, rows, pagination.
+- **Status bar**: active connection (the active tab's), query status, time, rows, pagination.
 - **Dialogs** never grow past their width or the window: user values in titles (connection or column names)
   are cut with `…`, messages wrap and long lists scroll inside the dialog. A UI test opens every dialog with
   long values and fails if anything sticks out (`TestNoOverflow`).
+
+### 4.1 Tabs
+
+- A tab is an open **table** (with its Structure / Data views and its FK chain, §6.5) or an **SQL
+  editor**. Tabs from different connections and databases live in the same bar: each one shows the color dot
+  of its connection, an icon (table, view or SQL), its title (the table, schema-qualified like the sidebar,
+  or `SQL · <database>`) and a close button (`×`). The bar scrolls horizontally when the tabs do not fit.
+- **Preview tab**: a click on a table in the sidebar activates its tab if it is already open (a tab showing that
+  table without a FK filter); otherwise it opens it in the **preview** tab (title in italics), which the next
+  table opened from the sidebar replaces. A double click on the table or on the tab, following a foreign key
+  or having pending changes makes it permanent. A table created with New table (§3.5) opens in a permanent tab.
+- **SQL tabs**: the `<>` button at the end of the bar (or Ctrl+T) opens an SQL editor on the active tab's database
+  (or the selected connection's, if it has its database configured). Each SQL tab has its own text and result.
+  SQL is only written in SQL tabs: table tabs have no SQL view.
+- **Pending changes stay in their tab**: switching tabs does not ask (the cell being edited is committed first;
+  if its value is invalid, the switch does not happen). A tab with unsaved changes shows `•` after its title.
+  Closing it asks first (§7.2).
+- Closing the active tab activates its neighbor (the next one, or the previous one if it was the last).
+  Disconnecting or deleting a connection asks for each of its tabs with pending changes and then closes all of
+  its tabs.
+- **Shortcuts** (global: they work with the focus in the editor or the grid, not while a dialog is open):
+  Ctrl+W closes the active tab, Ctrl+Tab / Ctrl+Shift+Tab move to the next / previous tab, Ctrl+T opens an
+  SQL tab.
+- Open tabs are not restored when Anvil starts again (left for later).
 
 ---
 
@@ -209,7 +237,7 @@ assets/              own embedded SVG icons
 
 ### 5.1 Features
 
-- One SQL editor per database (SQL tab of each table, §4). Multiple tabs are left for later.
+- The SQL editor lives in SQL tabs (§4.1): any number of them per database, each with its own text and result.
 - Editor: `github.com/go-gui-org/go-edit` (pure Go; selection, undo, line numbers).
 - **Syntax highlighting** with `chroma` through go-edit (lexer by engine: `postgresql`, `mysql`, `tsql`, `sql`;
   `github-dark` / `github` style depending on the theme).
@@ -308,8 +336,9 @@ horizontal scroll (scrollbar or Shift+wheel).
   statement fails, everything is rolled back, the error is shown in the preview naming the change
   (for example "The DELETE of row 1 failed: …") and the changes stay pending so they can be fixed.
 - **Cancel** discards every pending change.
-- Changing page, refreshing, changing the page size, going back, opening another table, disconnecting or
-  deleting the connection with pending changes asks first: **Save…**, **Discard** or **Cancel**.
+- Changing page, refreshing, changing the page size, going back, closing the tab, disconnecting or
+  deleting the connection with pending changes asks first: **Save…**, **Discard** or **Cancel**. Opening
+  another table or switching tabs does not: the changes stay in their tab (§4.1).
 - Closing the window with unsaved changes (including a cell being edited) asks to **Keep editing** or
   **Discard and close**.
 
@@ -423,6 +452,8 @@ The 6 findings from the initial review are resolved (milestone 1):
   selection with the `#` column, bar below the grid (Save, Cancel | Add, Delete | Set NULL, Set Now),
   calendar/time editor for dates, and confirmation before leaving or closing the window with unsaved
   changes.
+- **Tabs** (§4.1): table and SQL tabs from any connection, preview tab, pending changes per tab, close guard
+  and shortcuts (`ui/tabs.go`). **Refresh** of the table and database lists from the sidebar.
 - **Creating tables and databases** (§3.5): `internal/schema`, New table dialog with SQL preview, New
   database for server connections and New… SQLite file in the connection form.
 - **Overflow fixes**: dialogs and the sidebar keep long values inside them (§4), checked by `TestNoOverflow`.
@@ -454,10 +485,51 @@ The 6 findings from the initial review are resolved (milestone 1):
 - go-edit v0.12: the editor keeps the text measurer of the first software render; a second
   `soft.RenderToImage`/`RenderToPNG` of the same window uses it after it was closed and panics. Only affects
   headless screenshots of the SQL tab: they render once.
+- go-edit v0.12: the editor lays out a floating layer that sticks out of its pane, so `TestNoOverflow` does
+  not check a window with an SQL tab active.
+- go-gui v0.92: there is no click count; double clicks (sidebar table, tab) are detected with the time between
+  two clicks on the same widget (`App.doubleClick`, 400 ms).
 - go-edit v0.12: `ActionFunc` takes an unexported type; the run action is declared generic
   (`runAction[S any]`) and reads the cursors through reflection.
 - When an execution ends with an open transaction (`BEGIN` without `COMMIT`), a `ROLLBACK` is issued and the
   status bar says so: each execution uses its own session.
+
+### 12.3 Review backlog (October 2026)
+
+Findings from a project review at `6d19248`, to take into account in the next versions.
+
+**Possible bugs**
+
+1. **Pagination fallback inside a PG transaction** (`internal/query/exec.go`, `fetch`): if the wrapped
+   `SELECT * FROM (…) anvil_q` fails after a `BEGIN` (for example duplicate columns in a `JOIN`), PG aborts the
+   transaction and the unwrapped retry fails with "current transaction is aborted". Use a `SAVEPOINT`
+   before the wrapped attempt, or do not wrap while a transaction is open.
+2. **`returning()` with `strings.Contains`** (`internal/query/exec.go`): a `'returning'` literal or a
+   `returning_date` column is taken as `… RETURNING`. Detect it with the tokens of `drivers/lexer.go`.
+3. **Implicit transactions in Oracle and SQL Server** (`txOpen`, `internal/query/plan.go`): only
+   `BEGIN`/`START` open a transaction. In Oracle any DML opens one without `BEGIN` (and so does SQL Server with
+   `SET IMPLICIT_TRANSACTIONS ON`). Check what `go-ora` does when that connection goes back to the pool with
+   uncommitted DML: a later use could commit it.
+4. **macOS release binaries** (`.goreleaser.yaml`): darwin is built with `CGO_ENABLED=0`, which panics on
+   startup (§13). Leave darwin out of the release until there is a job on a macOS runner with CGO.
+
+**To add**
+
+- CI on every PR (`go vet`, `go test`), not only on `v*` tags; optionally with PostgreSQL and MySQL services
+  and the `ANVIL_TEST_*` variables.
+- Export to CSV/JSON (§9) before 1.0.
+- SSH tunnel: move it up, ahead of polishing Oracle and SQL Server.
+- Configurable query timeout, and a warning when the client-side pagination fallback has to read and
+  discard many rows to reach the offset.
+- Use the connection `Color` to tint the top bar or the SQL tab, as a signal for production connections.
+
+**To remove or simplify**
+
+- Mark Oracle and SQL Server as *experimental* in the README until CI covers them against real servers; focus
+  1.0 on SQLite, PostgreSQL and MySQL.
+- Translate the remaining Spanish comments (`main.go`, `.goreleaser.yaml`) to English.
+- Reduce the duplication between §12 and the README feature list: progress lives here, the README stays
+  user-facing.
 
 ---
 

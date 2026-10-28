@@ -21,9 +21,10 @@ import (
 // under the cursor (SPEC §5.2).
 const actionRun = "anvil.run"
 
-// sqlEditor is a database's SQL editor, with its last result.
+// sqlEditor is an SQL editor on a database, with its last result.
 type sqlEditor struct {
 	ID      string
+	Key     dbKey
 	Buf     *buffer.Buffer
 	hl      *highlight.Highlighter
 	hlTheme string
@@ -52,14 +53,24 @@ func (ed *sqlEditor) close() {
 	}
 }
 
-// editorFor returns the database's editor, creating it the first time.
-func editorFor(a *App, key dbKey) *sqlEditor {
-	ed, ok := a.SQL[key]
-	if !ok {
-		a.editorSeq++
-		ed = &sqlEditor{ID: gui.ScopeIDN("sql-editor", "", a.editorSeq), Buf: buffer.New()}
-		a.SQL[key] = ed
+// newEditor creates an SQL editor on a database.
+func newEditor(a *App, key dbKey) *sqlEditor {
+	a.editorSeq++
+	return &sqlEditor{ID: gui.ScopeIDN("sql-editor", "", a.editorSeq), Key: key, Buf: buffer.New()}
+}
+
+// editorByID finds the editor of an SQL tab by its widget ID.
+func editorByID(a *App, id string) *sqlEditor {
+	for _, t := range a.Tabs {
+		if t.SQL != nil && t.SQL.ID == id {
+			return t.SQL
+		}
 	}
+	return nil
+}
+
+// highlighter returns the editor's highlighter for the current theme.
+func (ed *sqlEditor) highlighter(a *App) *highlight.Highlighter {
 	// The chroma style depends on the theme: it is recreated when it changes.
 	if ed.hl == nil || ed.hlTheme != a.Prefs.Theme {
 		if ed.hl != nil {
@@ -69,10 +80,10 @@ func editorFor(a *App, key dbKey) *sqlEditor {
 		if a.Prefs.Theme == models.ThemeLight {
 			style = styles.Get("github")
 		}
-		ed.hl = highlight.New(ed.Buf, lexerFor(a, key), style)
+		ed.hl = highlight.New(ed.Buf, lexerFor(a, ed.Key), style)
 		ed.hlTheme = a.Prefs.Theme
 	}
-	return ed
+	return ed.hl
 }
 
 // lexerFor picks the chroma lexer for the engine (SPEC §5.1).
@@ -102,19 +113,9 @@ func textOffset(text string, p buffer.Position) int {
 	return min(off+p.ByteCol, len(text))
 }
 
-func sqlTab(w *gui.Window, a *App, key dbKey) gui.View {
+func sqlTab(w *gui.Window, a *App, ed *sqlEditor) gui.View {
 	t := gui.CurrentTheme()
-	ed := editorFor(a, key)
-
-	dbLabel := key.Database
-	if dbLabel == "" {
-		if c, ok := a.conn(key.ConnID); ok {
-			dbLabel = c.DB
-			if c.Engine == models.EngineSQLite {
-				dbLabel = c.Name
-			}
-		}
-	}
+	hl := ed.highlighter(a)
 
 	runBtn := components.IconButton("play", "Run", gui.ButtonCfg{
 		ID:       "sql-run",
@@ -143,7 +144,7 @@ func sqlTab(w *gui.Window, a *App, key dbKey) gui.View {
 		gui.Text(gui.TextCfg{Text: "Ctrl+Enter runs the selection or the statement under the cursor", TextStyle: t.TextStyleCaption}),
 		components.Spacer(),
 		components.Icon("database", 12),
-		gui.Text(gui.TextCfg{Text: dbLabel, TextStyle: t.TextStyleCaption}),
+		gui.Text(gui.TextCfg{Text: dbLabel(a, ed.Key), TextStyle: t.TextStyleCaption}),
 	)
 
 	editor := edit.Editor(edit.EditorCfg{
@@ -153,7 +154,7 @@ func sqlTab(w *gui.Window, a *App, key dbKey) gui.View {
 		Height:           ed.editorSize.H,
 		ShowLineNumbers:  true,
 		ShowBracketMatch: true,
-		Decorations:      []edit.DecorationProvider{ed.hl},
+		Decorations:      []edit.DecorationProvider{hl},
 		Keymaps: []*edit.Keymap{{
 			Name: "anvil",
 			Bindings: []edit.Binding{
@@ -189,7 +190,7 @@ func sqlTab(w *gui.Window, a *App, key dbKey) gui.View {
 						SizeBorder: gui.NoBorder,
 						Content:    []gui.View{components.MeasuredBox(ed.ID+"-pane", &ed.editorSize, true, editor)},
 					}),
-					sqlResults(w, a, key, ed),
+					sqlResults(ed),
 				},
 			})),
 		},
@@ -216,21 +217,19 @@ func runAction[S any](cfg edit.EditorCfg, st *S, buf *buffer.Buffer, w *gui.Wind
 	text := buf.String()
 	w.QueueCommand(func(w *gui.Window) {
 		a := appOf(w)
-		for key, ed := range a.SQL {
-			if ed.ID != cfg.ID {
-				continue
-			}
-			sql := text
-			switch {
-			case cursor == nil:
-			case cursor.HasSelection():
-				sql = buf.TextInRange(cursor.SelectionRange())
-			default:
-				sql = statementAt(a, key, text, textOffset(text, cursor.Cursor))
-			}
-			runSQL(w, key, sql)
+		ed := editorByID(a, cfg.ID)
+		if ed == nil {
 			return
 		}
+		sql := text
+		switch {
+		case cursor == nil:
+		case cursor.HasSelection():
+			sql = buf.TextInRange(cursor.SelectionRange())
+		default:
+			sql = statementAt(a, ed.Key, text, textOffset(text, cursor.Cursor))
+		}
+		runSQL(w, ed, sql)
 	})
 }
 
@@ -248,10 +247,9 @@ func statementAt(a *App, key dbKey, text string, offset int) string {
 }
 
 // runSQL builds the plan, asks for confirmation if there are warnings and runs it.
-func runSQL(w *gui.Window, key dbKey, sql string) {
+func runSQL(w *gui.Window, ed *sqlEditor, sql string) {
 	a := appOf(w)
-	ed := editorFor(a, key)
-	s, ok := a.Sessions.Get(key.ConnID)
+	s, ok := a.Sessions.Get(ed.Key.ConnID)
 	if !ok || ed.Running {
 		return
 	}
@@ -262,7 +260,7 @@ func runSQL(w *gui.Window, key dbKey, sql string) {
 		return
 	}
 	if len(plan.Warnings) == 0 {
-		executePlan(w, key, plan, sql)
+		executePlan(w, ed, plan, sql)
 		return
 	}
 	w.Dialog(gui.DialogCfg{
@@ -271,14 +269,14 @@ func runSQL(w *gui.Window, key dbKey, sql string) {
 		Body:       "• " + strings.Join(plan.Warnings, "\n• "),
 		MaxWidth:   gui.SomeF(560),
 		OnOkYes: func(w *gui.Window) {
-			executePlan(w, key, plan, sql)
+			executePlan(w, ed, plan, sql)
 		},
 	})
 }
 
-func executePlan(w *gui.Window, key dbKey, plan query.Plan, sql string) {
+func executePlan(w *gui.Window, ed *sqlEditor, plan query.Plan, sql string) {
 	a := appOf(w)
-	ed := editorFor(a, key)
+	key := ed.Key
 	s, ok := a.Sessions.Get(key.ConnID)
 	if !ok {
 		return
@@ -349,9 +347,9 @@ func saveHistory(w *gui.Window, connID uint, sql string, res query.RunResult, ru
 	})
 }
 
-func loadResultPage(w *gui.Window, key dbKey, index int) {
+func loadResultPage(w *gui.Window, ed *sqlEditor, index int) {
 	a := appOf(w)
-	ed := editorFor(a, key)
+	key := ed.Key
 	s, ok := a.Sessions.Get(key.ConnID)
 	if !ok || ed.Page == nil || ed.PageLoading {
 		return
@@ -375,7 +373,7 @@ func loadResultPage(w *gui.Window, key dbKey, index int) {
 	})
 }
 
-func sqlResults(w *gui.Window, a *App, key dbKey, ed *sqlEditor) gui.View {
+func sqlResults(ed *sqlEditor) gui.View {
 	t := gui.CurrentTheme()
 	var content []gui.View
 
@@ -405,7 +403,7 @@ func sqlResults(w *gui.Window, a *App, key dbKey, ed *sqlEditor) gui.View {
 						A11YCfg:  gui.A11YCfg{A11YLabel: "Previous page"},
 						Disabled: ed.PageLoading || p.Index == 0 || !p.Repeatable,
 						OnClick: func(ctx gui.EventCtx) {
-							loadResultPage(ctx.Window, key, p.Index-1)
+							loadResultPage(ctx.Window, ed, p.Index-1)
 							ctx.Consume()
 						},
 					}),
@@ -414,7 +412,7 @@ func sqlResults(w *gui.Window, a *App, key dbKey, ed *sqlEditor) gui.View {
 						A11YCfg:  gui.A11YCfg{A11YLabel: "Next page"},
 						Disabled: ed.PageLoading || !p.HasNext || !p.Repeatable,
 						OnClick: func(ctx gui.EventCtx) {
-							loadResultPage(ctx.Window, key, p.Index+1)
+							loadResultPage(ctx.Window, ed, p.Index+1)
 							ctx.Consume()
 						},
 					}),

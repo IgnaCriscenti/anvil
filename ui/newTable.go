@@ -257,7 +257,7 @@ func createTable(w *gui.Window, stmt string) {
 		}
 		loadTables(w, key, func(w *gui.Window, tables []drivers.Table) {
 			if tb, ok := createdTable(tables, name); ok {
-				openTable(w, key, tb)
+				openTable(w, key, tb, true)
 			}
 		})
 	})

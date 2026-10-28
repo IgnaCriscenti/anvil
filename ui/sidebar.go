@@ -78,10 +78,7 @@ func connectionItem(a *App, c models.DBConn) gui.View {
 			a.Selected = id
 			ctx.Consume()
 		},
-		components.Chevron(expanded),
-		components.ColorDot(c.Color, 10),
-		components.TreeLabel(c.Name, nameStyle),
-		gui.Text(gui.TextCfg{Text: engineLabel(c.Engine), TextStyle: t.TextStyleCaption}),
+		connRowContent(a, c, open, nameStyle)...,
 	)
 
 	if !expanded {
@@ -113,21 +110,62 @@ func connectionItem(a *App, c models.DBConn) gui.View {
 	return components.TreeColumn(items)
 }
 
+// connRowContent is the connection row: chevron, color, name, engine and,
+// if it is open, the refresh button.
+func connRowContent(a *App, c models.DBConn, open bool, nameStyle gui.TextStyle) []gui.View {
+	t := gui.CurrentTheme()
+	id := c.ID
+	content := []gui.View{
+		components.Chevron(open && a.Expanded[id]),
+		components.ColorDot(c.Color, 10),
+		components.TreeLabel(c.Name, nameStyle),
+		gui.Text(gui.TextCfg{Text: engineLabel(c.Engine), TextStyle: t.TextStyleCaption}),
+	}
+	if !open {
+		return content
+	}
+	return append(content, refreshButton(gui.ScopeID(gui.ScopeIDN("conn", "", int(id)), "refresh"),
+		"Refresh "+c.Name, a.Connecting[id] || a.Loading[dbKey{ConnID: id}],
+		func(w *gui.Window) { refreshConn(w, id) }))
+}
+
+// refreshButton is the small reload button of a sidebar row.
+func refreshButton(id, label string, busy bool, onClick func(w *gui.Window)) gui.View {
+	return components.IconButton("refresh", "", gui.ButtonCfg{
+		ID:       id,
+		Variant:  gui.ButtonGhost,
+		Padding:  gui.PadAll(2),
+		Disabled: busy,
+		A11YCfg:  gui.A11YCfg{A11YLabel: label},
+		OnClick: func(ctx gui.EventCtx) {
+			onClick(ctx.Window)
+			ctx.Consume()
+		},
+	})
+}
+
 // databaseItem is a server database and, if expanded, its tables.
 func databaseItem(a *App, c models.DBConn, name, scope string) []gui.View {
 	t := gui.CurrentTheme()
 	key := dbKey{ConnID: c.ID, Database: name}
 	expanded := a.DBExpanded[key]
 
+	row := []gui.View{
+		components.Chevron(expanded),
+		components.Icon("database", 12),
+		components.TreeLabel(name, t.TextStyleBodySmall),
+	}
+	if _, loaded := a.Tables[key]; loaded {
+		row = append(row, refreshButton(gui.ScopeID(scope, "refresh"), "Refresh "+name, a.Loading[key],
+			func(w *gui.Window) { loadTables(w, key, nil) }))
+	}
 	items := []gui.View{components.TreeRow(gui.ScopeID(scope, "row"), 1, false,
 		func(ctx gui.EventCtx) {
 			appOf(ctx.Window).Selected = key.ConnID
 			toggleDatabase(ctx.Window, key)
 			ctx.Consume()
 		},
-		components.Chevron(expanded),
-		components.Icon("database", 12),
-		components.TreeLabel(name, t.TextStyleBodySmall),
+		row...,
 	)}
 	if !expanded {
 		return items
@@ -197,11 +235,13 @@ func tableItem(a *App, c models.DBConn, key dbKey, tb drivers.Table, id string, 
 	if tb.Schema != "" && tb.Schema != "public" && tb.Schema != key.Database && tb.Schema != c.DB {
 		label = tb.Schema + "." + tb.Name
 	}
-	selected := a.Table != nil && a.Table.Key == key && a.Table.Table == tb
+	tv := a.table()
+	selected := tv != nil && tv.Key == key && tv.Table == tb
 
 	return components.TreeRow(id, level, selected,
 		func(ctx gui.EventCtx) {
-			openTable(ctx.Window, key, tb)
+			// A click opens the preview tab; a double click pins it.
+			openTable(ctx.Window, key, tb, appOf(ctx.Window).doubleClick(id))
 			ctx.Consume()
 		},
 		components.Icon(tableIcon(tb), 12),

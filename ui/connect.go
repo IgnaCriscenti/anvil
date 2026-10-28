@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/Watts-Argentina/anvil/internal/drivers"
 	"github.com/Watts-Argentina/anvil/models"
@@ -143,6 +144,44 @@ func loadTables(w *gui.Window, key dbKey, then func(w *gui.Window, tables []driv
 	})
 }
 
+// refreshConn reloads the sidebar of an open connection (SPEC §4): its
+// tables or, without a database, its database list and the tables of
+// the databases already loaded.
+func refreshConn(w *gui.Window, id uint) {
+	a := appOf(w)
+	s, ok := a.Sessions.Get(id)
+	// The key without a database marks the reload of the connection.
+	main := dbKey{ConnID: id}
+	if !ok || a.Connecting[id] || a.Loading[main] {
+		return
+	}
+	if !s.AllDatabases() {
+		loadTables(w, main, nil)
+		return
+	}
+	a.Loading[main] = true
+	async(w, s.Databases, func(w *gui.Window, dbs []string, err error) {
+		a := appOf(w)
+		delete(a.Loading, main)
+		if err != nil {
+			showError(w, err)
+			return
+		}
+		a.Databases[id] = dbs
+		for key := range a.Tables {
+			if key.ConnID != id {
+				continue
+			}
+			if slices.Contains(dbs, key.Database) {
+				loadTables(w, key, nil)
+			} else {
+				delete(a.Tables, key)
+				delete(a.DBExpanded, key)
+			}
+		}
+	})
+}
+
 // promptPassword asks for the password to connect. It reuses Form for the
 // dialog state (password, error, busy).
 func promptPassword(w *gui.Window, c models.DBConn, msg string) {
@@ -203,19 +242,10 @@ func promptPassword(w *gui.Window, c models.DBConn, msg string) {
 	})
 }
 
-// disconnect closes the connection, after saving or discarding the pending
-// changes of its open table.
+// disconnect closes the connection and its tabs, after saving or
+// discarding their pending changes.
 func disconnect(w *gui.Window, id uint) {
-	leaveTable(w, openTableOf(w, id), true, func(w *gui.Window) { closeConn(w, id) })
-}
-
-// openTableOf returns the table open in the central area if it belongs to
-// connection id.
-func openTableOf(w *gui.Window, id uint) *tableView {
-	if tv := appOf(w).Table; tv != nil && tv.Key.ConnID == id {
-		return tv
-	}
-	return nil
+	leaveTabs(w, id, func(w *gui.Window) { closeConn(w, id) })
 }
 
 func closeConn(w *gui.Window, id uint) {
@@ -238,7 +268,7 @@ func confirmDelete(w *gui.Window, id uint) {
 	if !ok {
 		return
 	}
-	leaveTable(w, openTableOf(w, id), true, func(w *gui.Window) { askDelete(w, c) })
+	leaveTabs(w, id, func(w *gui.Window) { askDelete(w, c) })
 }
 
 func askDelete(w *gui.Window, c models.DBConn) {

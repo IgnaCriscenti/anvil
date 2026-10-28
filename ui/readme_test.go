@@ -100,14 +100,14 @@ func TestReadmeScreenshots(t *testing.T) {
 
 	t.Run("sql", func(t *testing.T) {
 		a, w := demoApp(t, models.ThemeDark)
-		tv := openDemoTable(t, w, a, books, tabSQL)
-		ed := editorFor(a, tv.Key)
+		tv := openDemoTable(t, w, a, books, tabData)
+		ed := openSQLTab(w, a, tv.Key)
 		text := "-- Best-selling authors\nselect a.name as author, count(*) as orders, sum(o.quantity) as copies\n" +
 			"from orders o\n  join books b on b.id = o.book_id\n  join authors a on a.id = b.author_id\n" +
 			"group by a.name\norder by copies desc;"
 		ed.Buf = buffer.FromBytes([]byte(text))
 		ed.hl = nil
-		runSQL(w, tv.Key, text)
+		runSQL(w, ed, text)
 		waitFor(t, w, func() bool { return ed.Run != nil })
 		shot(w, "sql", false)
 	})
@@ -194,11 +194,11 @@ func openDemoTable(t *testing.T, w *gui.Window, a *App, tb drivers.Table, tab st
 	t.Helper()
 	a.TabSel = tab
 	for k := range a.Tables {
-		openTable(w, k, tb)
+		openTable(w, k, tb, false)
 	}
-	waitFor(t, w, func() bool { return a.Table != nil && !a.Table.Loading })
+	waitFor(t, w, func() bool { return a.table() != nil && !a.table().Loading })
 	if tab == tabData {
-		waitFor(t, w, func() bool { return a.Table.Data.fetched })
+		waitFor(t, w, func() bool { return a.table().Data.fetched })
 	}
-	return a.Table
+	return a.table()
 }

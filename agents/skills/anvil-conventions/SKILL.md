@@ -70,10 +70,13 @@ The 6 items from the initial review are resolved. See SPEC §12.1 for progress b
   comes back with `QueueCommand` + `InvalidateLayout`), `showError` (dialog) and `showWarning` (toast).
 - Inside a custom dialog, errors go **inline** (`App.Form.Error`, `dataState.SaveErr`): a new `w.Dialog`
   replaces the open one.
-- Central area: `App.Table` is the open `tableView` (columns, FKs, FK filter, `Back` to the view it came
-  from) and `tableView.Data` is the Data tab state (page, pending changes, selection). `openTable` (sidebar)
-  starts a new chain; `showTable`/`followFK` push onto it. Anything that drops a view or a page with pending
-  changes goes through `leaveTable` (`grid-editing` skill).
+- Central area: `App.Tabs` / `App.Active` (`ui/tabs.go`, SPEC §4.1). A `tab` is a table (`tab.Table` is
+  the current `tableView`: columns, FKs, FK filter, `Back` to the view it came from; `tab.Sub` its view) or an
+  SQL editor (`tab.SQL`). `a.table()` is the active tab's view. `tableView.Data` is the Data view state
+  (page, pending changes, selection). `openTable` (sidebar) activates the table's tab or fills the preview
+  tab; `showTable(w, tab, view)`/`followFK` push onto the tab's chain. Pending changes live in their tab:
+  closing a tab, disconnecting and anything that drops a view or a page goes through `leaveTable` /
+  `leaveTabs` (`grid-editing` skill). Shortcuts are global `gui.Command`s (`registerTabCommands`).
 - UI tests in `ui/ui_test.go`: `testApp` builds real state with SQLite; `checkFindings` uses
   `TestFindings(gui.DebugAll)`; `ANVIL_SCREENSHOTS=<dir> go test ./ui/` saves headless PNGs (`soft` backend).
 

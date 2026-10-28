@@ -78,7 +78,17 @@ func TestNoOverflow(t *testing.T) {
 		{"main", func(w *gui.Window, a *App) {}},
 		{"sidebar-long-names", func(w *gui.Window, a *App) {
 			a.Connections[0].Name = long
-			a.Tables[a.Table.Key] = append(a.Tables[a.Table.Key], drivers.Table{Name: long})
+			a.Tables[a.table().Key] = append(a.Tables[a.table().Key], drivers.Table{Name: long})
+		}},
+		{"many-tabs", func(w *gui.Window, a *App) {
+			key := a.table().Key
+			for i := range 12 {
+				a.newTab(&tab{Key: key, Sub: tabStructure, Table: &tableView{Key: key, Table: drivers.Table{Name: long + itoa(i)}}})
+			}
+			newSQLTab(w, key)
+			// go-edit lays out a floating layer past the editor, so a table
+			// tab stays active.
+			activateTab(w, a.Tabs[1])
 		}},
 		{"conn-form-pg", func(w *gui.Window, a *App) { openConnForm(w, models.DBConn{}) }},
 		{"conn-form-sqlite", func(w *gui.Window, a *App) {
@@ -94,19 +104,19 @@ func TestNoOverflow(t *testing.T) {
 		{"delete", func(w *gui.Window, a *App) { askDelete(w, models.DBConn{Name: long}) }},
 		{"error", func(w *gui.Window, a *App) { showError(w, errors.New(strings.Repeat("error text ", 40))) }},
 		{"new-table", func(w *gui.Window, a *App) {
-			openNewTable(w, a.Table.Key)
+			openNewTable(w, a.table().Key)
 			a.NewTable.Name = long
 			a.NewTable.Columns[1].Name = long
 			a.NewTable.Columns[1].Default = "'" + long + "'"
 		}},
 		{"new-table-many-columns", func(w *gui.Window, a *App) {
-			openNewTable(w, a.Table.Key)
+			openNewTable(w, a.table().Key)
 			for range 30 {
 				a.NewTable.addColumn(schemaColumn("c", "text", ""))
 			}
 		}},
 		{"new-table-error", func(w *gui.Window, a *App) {
-			openNewTable(w, a.Table.Key)
+			openNewTable(w, a.table().Key)
 			a.NewTable.Error = "The table was not created. " + strings.Repeat("the server rejected it ", 8)
 		}},
 		{"new-database", func(w *gui.Window, a *App) {
@@ -115,20 +125,20 @@ func TestNoOverflow(t *testing.T) {
 			a.NewDB.Error = "The database was not created. " + long
 		}},
 		{"save-changes", func(w *gui.Window, a *App) {
-			tv := a.Table
+			tv := a.table()
 			tv.Data.Pending.Set(0, "name", editing.Text(long+long), editing.Text("Ana"))
 			reviewSave(w, tv, nil)
 		}},
 		{"leave", func(w *gui.Window, a *App) {
-			a.Table.Data.Pending.Set(0, "name", editing.Text("Ann"), editing.Text("Ana"))
-			leaveTable(w, a.Table, true, func(*gui.Window) {})
+			a.table().Data.Pending.Set(0, "name", editing.Text("Ann"), editing.Text("Ana"))
+			leaveTable(w, a.table(), true, func(*gui.Window) {})
 		}},
 		{"close", func(w *gui.Window, a *App) {
-			a.Table.Data.Pending.Set(0, "name", editing.Text("Ann"), editing.Text("Ana"))
+			a.table().Data.Pending.Set(0, "name", editing.Text("Ann"), editing.Text("Ana"))
 			confirmClose(w)
 		}},
 		{"date-editor", func(w *gui.Window, a *App) {
-			startEdit(w, a.Table, cellRef{Row: 0, Column: "created"})
+			startEdit(w, a.table(), cellRef{Row: 0, Column: "created"})
 		}},
 	}
 	for _, theme := range []string{models.ThemeDark, models.ThemeLight} {
@@ -138,9 +148,9 @@ func TestNoOverflow(t *testing.T) {
 				t.Cleanup(func() { applyTheme(nil, models.ThemeDark) })
 				a := testApp(t)
 				w := newTestWindow(t, a)
-				key := a.Table.Key
-				openTable(w, key, a.Tables[key][1]) // customers
-				waitFor(t, w, func() bool { return a.Table.Data.fetched })
+				key := a.table().Key
+				openTable(w, key, a.Tables[key][1], false) // customers
+				waitFor(t, w, func() bool { return a.table().Data.fetched })
 				tc.open(w, a)
 				checkOverflow(t, w, theme+"-"+tc.name)
 			})

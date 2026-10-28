@@ -39,6 +39,9 @@ func Start() {
 		// Asks before losing unsaved grid changes (SPEC §7.2).
 		OnCloseRequest: confirmClose,
 		OnInit: func(w *gui.Window) {
+			if err := registerTabCommands(w); err != nil {
+				log.Print(err)
+			}
 			w.SetView(mainView)
 			reloadConnections(w)
 		},

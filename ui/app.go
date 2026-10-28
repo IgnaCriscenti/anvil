@@ -3,6 +3,8 @@ package ui
 import (
 	"context"
 	"errors"
+	"slices"
+	"time"
 
 	"github.com/Watts-Argentina/anvil/internal/connections"
 	"github.com/Watts-Argentina/anvil/internal/drivers"
@@ -40,10 +42,11 @@ type App struct {
 	Filter     map[dbKey]string
 	Loading    map[dbKey]bool
 
-	Table  *tableView // table selected in the sidebar
-	TabSel string     // chosen tab (structure, data, sql); kept when switching tables
-	// SQL editor per database: shared by every table of that database.
-	SQL       map[dbKey]*sqlEditor
+	// Open tabs of the central area, in order, and the active one (SPEC §4.1).
+	Tabs      []*tab
+	Active    *tab
+	tabSeq    int
+	TabSel    string // last chosen view (structure, data); new table tabs start on it
 	editorSeq int
 	Form      connForm
 	Pending   string // password in the connect prompt
@@ -52,6 +55,11 @@ type App struct {
 
 	SidebarRatio  float32
 	KeyringWarned bool
+
+	lastClick struct { // for doubleClick
+		id string
+		at time.Time
+	}
 }
 
 // dbKey identifies a database within a connection. Database is "" when
@@ -61,7 +69,7 @@ type dbKey struct {
 	Database string
 }
 
-// tableView is the table open in the central area.
+// tableView is a table open in a tab.
 type tableView struct {
 	Key     dbKey
 	Table   drivers.Table
@@ -82,7 +90,6 @@ func newApp(conns *connections.Service, st *settings.Service, h *history.Service
 		Settings:     st,
 		History:      h,
 		TabSel:       tabData,
-		SQL:          map[dbKey]*sqlEditor{},
 		Sessions:     session.NewManager(),
 		Prefs:        settings.Defaults(),
 		Expanded:     map[uint]bool{},
@@ -132,14 +139,10 @@ func (a *App) forgetConn(id uint) {
 			delete(a.Loading, k)
 		}
 	}
-	for k, ed := range a.SQL {
-		if k.ConnID == id {
-			ed.close()
-			delete(a.SQL, k)
+	for _, t := range slices.Clone(a.Tabs) {
+		if t.Key.ConnID == id {
+			dropTab(a, t)
 		}
-	}
-	if a.Table != nil && a.Table.Key.ConnID == id {
-		a.Table = nil
 	}
 }
 

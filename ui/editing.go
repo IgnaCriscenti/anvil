@@ -451,17 +451,19 @@ func leaveTable(w *gui.Window, tv *tableView, chain bool, then func(w *gui.Windo
 	})
 }
 
-// unsavedChanges counts the pending changes of the open table and the
-// views it was opened from, including a cell being edited.
+// unsavedChanges counts the pending changes of every tab, with the views
+// each one was opened from, including a cell being edited.
 func unsavedChanges(a *App) (n int, tables []string) {
-	for tv := a.Table; tv != nil; tv = tv.Back {
-		c := tv.Data.Pending.Len()
-		if tv.Data.Edit.Active {
-			c++
-		}
-		if c > 0 {
-			n += c
-			tables = append(tables, tv.Table.Name)
+	for _, t := range a.Tabs {
+		for tv := t.Table; tv != nil; tv = tv.Back {
+			c := tv.Data.Pending.Len()
+			if tv.Data.Edit.Active {
+				c++
+			}
+			if c > 0 {
+				n += c
+				tables = append(tables, tv.Table.Name)
+			}
 		}
 	}
 	return n, tables

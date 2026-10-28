@@ -67,9 +67,10 @@ type Change struct {
 - **Styles**: modified cells with `BgColor` (warning subtle), new rows in the success color with `DEFAULT`
   for unset columns, deleted rows struck through (also their number), selected rows with an accent number and
   accent-subtle cells, active cell underlined. FK links are hidden on modified cells.
-- **Guards**: `leaveTable` (Save… / Discard / Cancel) on page change, refresh, page size, back, opening
-  another table from the sidebar (checks the whole FK chain: `pendingView`), disconnect and delete
-  connection. Window close: `WindowCfg.OnCloseRequest = confirmClose` (Keep editing / Discard and close);
+- **Guards**: `leaveTable` (Save… / Discard / Cancel) on page change, refresh, page size, back, closing a
+  tab (checks the whole FK chain: `pendingView`), and `leaveTabs` on disconnect and delete connection.
+  Switching tabs or opening another table does **not** ask: changes stay in their tab (a dirty preview tab
+  is not replaced) and the tab shows `•`. Window close: `WindowCfg.OnCloseRequest = confirmClose` (Keep editing / Discard and close);
   the hook must call `w.Close()` to proceed. Use in-window `w.Dialog`, not `NativeSaveDiscardDialog`.
 
 ## DML generation (SPEC §7.3–7.4)

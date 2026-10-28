@@ -15,17 +15,7 @@ import (
 const (
 	tabStructure = "structure"
 	tabData      = "data"
-	tabSQL       = "sql"
 )
-
-// openTable shows the table in the central area and loads its columns. The
-// views of the current table are left, so their pending changes are saved
-// or discarded first.
-func openTable(w *gui.Window, key dbKey, tb drivers.Table) {
-	leaveTable(w, appOf(w).Table, true, func(w *gui.Window) {
-		showTable(w, &tableView{Key: key, Table: tb})
-	})
-}
 
 // tableMeta is what a table view loads before its data.
 type tableMeta struct {
@@ -33,9 +23,9 @@ type tableMeta struct {
 	fks  []drivers.ForeignKey
 }
 
-// showTable makes view the current table and loads its columns and
-// foreign keys.
-func showTable(w *gui.Window, view *tableView) {
+// showTable makes view the current view of tab t and loads its columns
+// and foreign keys.
+func showTable(w *gui.Window, t *tab, view *tableView) {
 	a := appOf(w)
 	s, ok := a.Sessions.Get(view.Key.ConnID)
 	if !ok {
@@ -44,7 +34,7 @@ func showTable(w *gui.Window, view *tableView) {
 	a.Selected = view.Key.ConnID
 	view.Loading = true
 	view.Data = dataState{Size: a.Prefs.DefaultPageSize}
-	a.Table = view
+	t.Table = view
 
 	key, tb := view.Key, view.Table
 	async(w, func(ctx context.Context) (tableMeta, error) {
@@ -65,7 +55,7 @@ func showTable(w *gui.Window, view *tableView) {
 			showWarning(w, err)
 		}
 		view.Columns, view.FKs = m.cols, m.fks
-		if appOf(w).TabSel == tabData {
+		if t.Sub == tabData && t.Table == view {
 			loadData(w, view, firstPage)
 		}
 	})
@@ -83,22 +73,26 @@ func followFK(w *gui.Window, tv *tableView, fk drivers.ForeignKey, row []query.V
 		}
 		filter[i] = query.Cond{Column: fk.RefColumns[i], Value: row[col].Raw}
 	}
-	a := appOf(w)
-	a.TabSel = tabData
-	showTable(w, &tableView{Key: tv.Key, Table: fk.RefTable, Filter: filter, Back: tv})
-}
-
-// goBack returns to the table the current view was opened from.
-func goBack(w *gui.Window) {
-	a := appOf(w)
-	if a.Table == nil || a.Table.Back == nil {
+	t := appOf(w).Active
+	if t == nil || t.Table != tv {
 		return
 	}
-	leaveTable(w, a.Table, false, func(w *gui.Window) {
-		a.Table = a.Table.Back
-		a.TabSel = tabData
-		if !a.Table.Data.loaded() {
-			loadData(w, a.Table, query.Reload)
+	// Following a key pins the tab: its chain is worth keeping.
+	t.Sub, t.Preview = tabData, false
+	showTable(w, t, &tableView{Key: tv.Key, Table: fk.RefTable, Filter: filter, Back: tv})
+}
+
+// goBack returns the active tab to the table its view was opened from.
+func goBack(w *gui.Window) {
+	t := appOf(w).Active
+	if t == nil || t.Table == nil || t.Table.Back == nil {
+		return
+	}
+	leaveTable(w, t.Table, false, func(w *gui.Window) {
+		t.Table = t.Table.Back
+		t.Sub = tabData
+		if !t.Table.Data.loaded() {
+			loadData(w, t.Table, query.Reload)
 		}
 	})
 }
@@ -113,18 +107,23 @@ func (tv *tableView) fkOf(column string) (drivers.ForeignKey, bool) {
 	return drivers.ForeignKey{}, false
 }
 
-func selectTab(w *gui.Window, tab string) {
+// selectTab picks the Structure or Data view of the active table tab.
+func selectTab(w *gui.Window, sub string) {
 	a := appOf(w)
-	a.TabSel = tab
-	tv := a.Table
-	if tab == tabData && tv != nil && !tv.Loading && tv.Err == "" && !tv.Data.loaded() {
+	t := a.Active
+	if t == nil || t.Table == nil {
+		return
+	}
+	a.TabSel, t.Sub = sub, sub
+	tv := t.Table
+	if sub == tabData && !tv.Loading && tv.Err == "" && !tv.Data.loaded() {
 		loadData(w, tv, firstPage)
 	}
 }
 
 func centralArea(w *gui.Window, a *App) gui.View {
 	t := gui.CurrentTheme()
-	if a.Table == nil {
+	if a.Active == nil {
 		return gui.Column(gui.ContainerCfg{
 			Sizing:     gui.FillFill,
 			HAlign:     gui.HAlignCenter,
@@ -138,7 +137,32 @@ func centralArea(w *gui.Window, a *App) gui.View {
 		})
 	}
 
-	tv := a.Table
+	var body gui.View
+	if a.Active.SQL != nil {
+		body = gui.Column(gui.ContainerCfg{
+			ID:         "sql-area",
+			Sizing:     gui.FillFill,
+			Padding:    gui.PaddingSmall,
+			SizeBorder: gui.NoBorder,
+			Content:    []gui.View{sqlTab(w, a, a.Active.SQL)},
+		})
+	} else {
+		body = tableArea(w, a, a.Active)
+	}
+	return gui.Column(gui.ContainerCfg{
+		ID:         "central",
+		Sizing:     gui.FillFill,
+		Padding:    gui.NoPadding,
+		Spacing:    gui.NoSpacing,
+		SizeBorder: gui.NoBorder,
+		Content:    []gui.View{tabBar(a), body},
+	})
+}
+
+// tableArea is a table tab: its header and the Structure / Data views.
+func tableArea(w *gui.Window, a *App, tb *tab) gui.View {
+	t := gui.CurrentTheme()
+	tv := tb.Table
 	title := tv.Table.Name
 	if tv.Table.Schema != "" && tv.Table.Schema != tv.Key.Database {
 		title = tv.Table.Schema + "." + title
@@ -167,7 +191,7 @@ func centralArea(w *gui.Window, a *App) gui.View {
 	}
 
 	return gui.Column(gui.ContainerCfg{
-		ID:         "central",
+		ID:         "table-area",
 		Sizing:     gui.FillFill,
 		Padding:    gui.PaddingSmall,
 		Spacing:    gui.SpacingSmall,
@@ -183,14 +207,13 @@ func centralArea(w *gui.Window, a *App) gui.View {
 			gui.TabControl(gui.TabControlCfg{
 				ID:       "table-tabs",
 				Sizing:   gui.FillFill,
-				Selected: a.TabSel,
+				Selected: tb.Sub,
 				OnSelect: func(id string, ctx gui.EventCtx) {
 					selectTab(ctx.Window, id)
 				},
 				Items: []gui.TabItemCfg{
 					gui.NewTabItem(tabStructure, "Structure", []gui.View{structureTab(tv)}),
 					gui.NewTabItem(tabData, "Data", []gui.View{dataTab(w, a, tv)}),
-					gui.NewTabItem(tabSQL, "SQL", []gui.View{sqlTab(w, a, tv.Key)}),
 				},
 			}),
 		},

@@ -91,7 +91,9 @@ func testApp(t *testing.T) *App {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.Table = &tableView{Key: key, Table: a.Tables[key][1], Columns: cols}
+	a.newTab(&tab{Key: key, Sub: tabData, Table: &tableView{
+		Key: key, Table: a.Tables[key][1], Columns: cols, Data: dataState{Size: a.Prefs.DefaultPageSize},
+	}})
 	return a
 }
 
@@ -155,15 +157,15 @@ func TestConnForm(t *testing.T) {
 func TestSidebarClickSelectsTable(t *testing.T) {
 	a := testApp(t)
 	w := newTestWindow(t, a)
-	a.Table = nil
+	dropTab(a, a.Active)
 	w.TestRender(nil)
 
 	id := gui.ScopeIDN(gui.ScopeIDN("conn", "", int(a.Selected)), "table", 0)
 	if err := w.TestClick(id); err != nil {
 		t.Fatal(err)
 	}
-	if a.Table == nil || a.Table.Table.Name != "big_orders" {
-		t.Fatalf("table not opened: %+v", a.Table)
+	if a.table() == nil || a.table().Table.Name != "big_orders" {
+		t.Fatalf("table not opened: %+v", a.table())
 	}
 }
 
@@ -254,12 +256,12 @@ func TestNewTable(t *testing.T) {
 	screenshot(t, w, "new-table")
 
 	clickDialog(t, w, "nt-create")
-	waitFor(t, w, func() bool { return a.Table != nil && a.Table.Table.Name == "notes" && !a.Table.Loading })
-	cols := a.Table.Columns
+	waitFor(t, w, func() bool { return a.table() != nil && a.table().Table.Name == "notes" && !a.table().Loading })
+	cols := a.table().Columns
 	if len(cols) != 3 || !cols[0].PK || cols[1].Nullable || !cols[2].Nullable {
 		t.Fatalf("columns: %+v", cols)
 	}
-	if !slices.ContainsFunc(a.Tables[a.Table.Key], func(tb drivers.Table) bool { return tb.Name == "notes" }) {
+	if !slices.ContainsFunc(a.Tables[a.table().Key], func(tb drivers.Table) bool { return tb.Name == "notes" }) {
 		t.Fatal("sidebar not reloaded")
 	}
 }
@@ -270,6 +272,12 @@ func schemaColumn(name, typ, def string) schema.Column {
 
 // waitFor processes frames until cond holds (the asyncs come back through
 // QueueCommand).
+// openSQLTab opens an SQL tab on key and returns its editor.
+func openSQLTab(w *gui.Window, a *App, key dbKey) *sqlEditor {
+	newSQLTab(w, key)
+	return a.Active.SQL
+}
+
 func waitFor(t *testing.T, w *gui.Window, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -285,19 +293,19 @@ func waitFor(t *testing.T, w *gui.Window, cond func() bool) {
 func TestTableTabs(t *testing.T) {
 	a := testApp(t)
 	w := newTestWindow(t, a)
-	key := a.Table.Key
+	key := a.table().Key
 
 	// openTable loads the columns and the first data page.
-	openTable(w, key, a.Tables[key][1]) // customers
-	waitFor(t, w, func() bool { return a.Table.Data.fetched })
-	if got := len(a.Table.Data.Page.Rows); got != 3 {
-		t.Fatalf("rows = %d (%s)", got, a.Table.Data.Err)
+	openTable(w, key, a.Tables[key][1], false) // customers
+	waitFor(t, w, func() bool { return a.table().Data.fetched })
+	if got := len(a.table().Data.Page.Rows); got != 3 {
+		t.Fatalf("rows = %d (%s)", got, a.table().Data.Err)
 	}
-	if !a.Table.Data.Page.Rows[1][2].Null || a.Table.Data.Page.Rows[2][2].Null {
+	if !a.table().Data.Page.Rows[1][2].Null || a.table().Data.Page.Rows[2][2].Null {
 		t.Fatal("NULL and empty string must differ")
 	}
 
-	for _, tab := range []string{tabStructure, tabData, tabSQL} {
+	for _, tab := range []string{tabStructure, tabData} {
 		selectTab(w, tab)
 		w.TestRender(nil)
 		checkFindings(t, w)
@@ -316,11 +324,11 @@ func TestTableTabs(t *testing.T) {
 func TestFollowForeignKey(t *testing.T) {
 	a := testApp(t)
 	w := newTestWindow(t, a)
-	key := a.Table.Key
+	key := a.table().Key
 
-	openTable(w, key, a.Tables[key][2]) // orders
-	waitFor(t, w, func() bool { return a.Table.Data.fetched })
-	orders := a.Table
+	openTable(w, key, a.Tables[key][2], false) // orders
+	waitFor(t, w, func() bool { return a.table().Data.fetched })
+	orders := a.table()
 	if len(orders.FKs) != 1 || orders.FKs[0].RefTable.Name != "customers" {
 		t.Fatalf("foreign keys = %+v", orders.FKs)
 	}
@@ -334,12 +342,12 @@ func TestFollowForeignKey(t *testing.T) {
 	if err := w.TestClick(gui.ScopeIDN("data-grid", "link", 2*3+1)); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, w, func() bool { return a.Table != orders && a.Table.Data.fetched })
-	if a.Table.Table.Name != "customers" || a.Table.Back != orders {
-		t.Fatalf("opened %+v", a.Table.Table)
+	waitFor(t, w, func() bool { return a.table() != orders && a.table().Data.fetched })
+	if a.table().Table.Name != "customers" || a.table().Back != orders {
+		t.Fatalf("opened %+v", a.table().Table)
 	}
-	if rows := a.Table.Data.Page.Rows; len(rows) != 1 || rows[0][1].Text != "Bruno" {
-		t.Fatalf("customer rows = %v (%s)", rows, a.Table.Data.Err)
+	if rows := a.table().Data.Page.Rows; len(rows) != 1 || rows[0][1].Text != "Bruno" {
+		t.Fatalf("customer rows = %v (%s)", rows, a.table().Data.Err)
 	}
 	w.TestRender(nil)
 	checkFindings(t, w)
@@ -352,7 +360,7 @@ func TestFollowForeignKey(t *testing.T) {
 	if err := w.TestClick(ids[0]); err != nil {
 		t.Fatal(err)
 	}
-	if a.Table != orders {
+	if a.table() != orders {
 		t.Fatal("back did not return to orders")
 	}
 }
@@ -393,18 +401,18 @@ func typeCell(t *testing.T, w *gui.Window, tv *tableView, ref cellRef, text stri
 func TestEditRows(t *testing.T) {
 	a := testApp(t)
 	w := newTestWindow(t, a)
-	key := a.Table.Key
+	key := a.table().Key
 
 	// Views are read-only.
-	openTable(w, key, a.Tables[key][0]) // big_orders
-	waitFor(t, w, func() bool { return a.Table.Data.fetched })
-	if a.Table.editable(a) {
+	openTable(w, key, a.Tables[key][0], false) // big_orders
+	waitFor(t, w, func() bool { return a.table().Data.fetched })
+	if a.table().editable(a) {
 		t.Fatal("a view must not be editable")
 	}
 
-	openTable(w, key, a.Tables[key][1]) // customers
-	waitFor(t, w, func() bool { return a.Table.Data.fetched })
-	tv := a.Table
+	openTable(w, key, a.Tables[key][1], false) // customers
+	waitFor(t, w, func() bool { return a.table().Data.fetched })
+	tv := a.table()
 	if !tv.editable(a) {
 		t.Fatal("customers should be editable")
 	}
@@ -492,25 +500,31 @@ func TestEditRows(t *testing.T) {
 		t.Fatalf("rows after save = %v", got)
 	}
 
-	// Leaving with pending changes asks first; Discard goes on.
+	// Opening another table keeps the pending changes in their tab (it is
+	// not replaced as a preview); closing that tab asks first.
 	typeCell(t, w, tv, cellRef{Row: 0, Column: "name"}, "!", gui.KeyEnter, 0)
-	openTable(w, key, a.Tables[key][2]) // orders
-	if a.Table != tv {
-		t.Fatal("left the table without asking")
+	edited := a.Active
+	openTable(w, key, a.Tables[key][2], false) // orders
+	if a.table() == tv || a.table().Table.Name != "orders" || !edited.dirty() {
+		t.Fatalf("table = %+v, edited tab dirty = %v", a.table().Table, edited.dirty())
+	}
+	closeTab(w, edited)
+	if !slices.Contains(a.Tabs, edited) {
+		t.Fatal("closed the tab without asking")
 	}
 	clickDialog(t, w, "unsaved-discard")
-	if a.Table == tv || a.Table.Table.Name != "orders" {
-		t.Fatalf("table = %+v", a.Table.Table)
+	if slices.Contains(a.Tabs, edited) || a.table().Table.Name != "orders" {
+		t.Fatalf("tabs = %d, table = %+v", len(a.Tabs), a.table().Table)
 	}
 }
 
 func TestMultiSelect(t *testing.T) {
 	a := testApp(t)
 	w := newTestWindow(t, a)
-	key := a.Table.Key
-	openTable(w, key, a.Tables[key][1]) // customers
-	waitFor(t, w, func() bool { return a.Table.Data.fetched })
-	tv := a.Table
+	key := a.table().Key
+	openTable(w, key, a.Tables[key][1], false) // customers
+	waitFor(t, w, func() bool { return a.table().Data.fetched })
+	tv := a.table()
 	p := &tv.Data.Pending
 	id := p.AddRow()
 	k := func(r int) rowKey { return rowKey{Row: r} }
@@ -577,10 +591,10 @@ func TestMultiSelect(t *testing.T) {
 func TestDateEditor(t *testing.T) {
 	a := testApp(t)
 	w := newTestWindow(t, a)
-	key := a.Table.Key
-	openTable(w, key, a.Tables[key][1]) // customers
-	waitFor(t, w, func() bool { return a.Table.Data.fetched })
-	tv := a.Table
+	key := a.table().Key
+	openTable(w, key, a.Tables[key][1], false) // customers
+	waitFor(t, w, func() bool { return a.table().Data.fetched })
+	tv := a.table()
 	p := &tv.Data.Pending
 
 	// A timestamp opens the calendar on the value's month, with its time.
@@ -644,10 +658,10 @@ func TestDateEditor(t *testing.T) {
 func TestCloseWithUnsavedChanges(t *testing.T) {
 	a := testApp(t)
 	w := newTestWindow(t, a)
-	key := a.Table.Key
-	openTable(w, key, a.Tables[key][1]) // customers
-	waitFor(t, w, func() bool { return a.Table.Data.fetched })
-	tv := a.Table
+	key := a.table().Key
+	openTable(w, key, a.Tables[key][1], false) // customers
+	waitFor(t, w, func() bool { return a.table().Data.fetched })
+	tv := a.table()
 
 	// Nothing pending: it closes right away.
 	confirmClose(w)
@@ -680,13 +694,12 @@ func TestCloseWithUnsavedChanges(t *testing.T) {
 func TestSQLRun(t *testing.T) {
 	a := testApp(t)
 	w := newTestWindow(t, a)
-	key := a.Table.Key
-	selectTab(w, tabSQL)
+	key := a.table().Key
+	ed := openSQLTab(w, a, key)
 	w.TestRender(nil)
 
 	// The Ctrl+Enter path (a go-edit action) needs a text backend;
 	// here the statement under the cursor and runSQL are tested.
-	ed := editorFor(a, key)
 	text := "select name, email from customers order by id;\nselect 1 as x;"
 	ed.Buf = buffer.FromBytes([]byte(text))
 	ed.hl = nil
@@ -696,7 +709,7 @@ func TestSQLRun(t *testing.T) {
 	if got := statementAt(a, key, text, textOffset(text, buffer.Position{Line: 1, ByteCol: 2})); got != "select 1 as x" {
 		t.Fatalf("statement on line 2 = %q", got)
 	}
-	runSQL(w, key, "select name, email from customers order by id")
+	runSQL(w, ed, "select name, email from customers order by id")
 	waitFor(t, w, func() bool { return ed.Run != nil })
 	w.TestRender(nil)
 	if ed.Err != "" || ed.Page == nil || len(ed.Page.Columns) != 2 || len(ed.Page.Rows) != 3 {
@@ -705,7 +718,7 @@ func TestSQLRun(t *testing.T) {
 	screenshot(t, w, "sql-result")
 
 	// A long result is paginated and the grid scrolls inside its panel.
-	runSQL(w, key, "with recursive n(i) as (select 1 union all select i + 1 from n where i < 300) select i, 'row ' || i as label, null as empty from n")
+	runSQL(w, ed, "with recursive n(i) as (select 1 union all select i + 1 from n where i < 300) select i, 'row ' || i as label, null as empty from n")
 	waitFor(t, w, func() bool { return !ed.Running && (ed.Err != "" || ed.Page != nil && len(ed.Page.Rows) == 100) })
 	if ed.Err != "" {
 		t.Fatalf("err = %s", ed.Err)
@@ -713,7 +726,7 @@ func TestSQLRun(t *testing.T) {
 	if !ed.Page.HasNext {
 		t.Fatal("expected more pages")
 	}
-	loadResultPage(w, key, 2)
+	loadResultPage(w, ed, 2)
 	waitFor(t, w, func() bool { return ed.Page.Index == 2 })
 	if got := ed.Page.Rows[0][0].Text; got != "201" || ed.Page.HasNext {
 		t.Fatalf("page 3 starts at %q, next=%v", got, ed.Page.HasNext)
@@ -733,7 +746,7 @@ func TestSQLRun(t *testing.T) {
 	}
 
 	// DELETE without WHERE asks for confirmation before running.
-	runSQL(w, key, "delete from orders")
+	runSQL(w, ed, "delete from orders")
 	w.TestRender(nil)
 	if !w.DialogIsVisible() {
 		t.Fatal("expected confirmation dialog")
@@ -742,7 +755,7 @@ func TestSQLRun(t *testing.T) {
 	w.DialogDismiss()
 
 	// Engine errors are shown in the results panel.
-	runSQL(w, key, "select * from nope")
+	runSQL(w, ed, "select * from nope")
 	waitFor(t, w, func() bool { return !ed.Running && ed.Err != "" })
 	if !strings.Contains(ed.Err, "no such table") {
 		t.Fatalf("err = %q", ed.Err)
@@ -771,10 +784,9 @@ func TestSQLGridRowHeight(t *testing.T) {
 	a := testApp(t)
 	w := newTestWindow(t, a)
 	soft.RenderToImage(w, 1) // text measurer, as in the app
-	key := a.Table.Key
-	selectTab(w, tabSQL)
-	ed := editorFor(a, key)
-	runSQL(w, key, "select name, email from customers order by id")
+	key := a.table().Key
+	ed := openSQLTab(w, a, key)
+	runSQL(w, ed, "select name, email from customers order by id")
 	waitFor(t, w, func() bool { return ed.Run != nil })
 	w.TestRender(nil)
 	ly := w.TestRender(nil)
@@ -786,15 +798,15 @@ func TestSQLGridRowHeight(t *testing.T) {
 func TestWideTable(t *testing.T) {
 	a := testApp(t)
 	w := newTestWindow(t, a)
-	key := a.Table.Key
+	key := a.table().Key
 	var wide drivers.Table
 	for _, tb := range a.Tables[key] {
 		if tb.Name == "wide" {
 			wide = tb
 		}
 	}
-	openTable(w, key, wide)
-	waitFor(t, w, func() bool { return a.Table.Data.fetched })
+	openTable(w, key, wide, false)
+	waitFor(t, w, func() bool { return a.table().Data.fetched })
 	w.TestRender(nil)
 	w.TestRender(nil)
 	checkFindings(t, w)
@@ -811,18 +823,18 @@ func TestWideTable(t *testing.T) {
 	}
 	w.ScrollHorizontalTo(id, -1e6)
 	w.TestRender(nil)
-	size := a.Table.Data.gridSize
+	size := a.table().Data.gridSize
 	if x, _, _ := w.TestScrollOffset(id); size.ContentW <= size.W || x > size.W-size.ContentW+1 {
 		t.Fatalf("offset %v cannot reach the last column (content %v, viewport %v)", x, size.ContentW, size.W)
 	}
 	screenshot(t, w, "wide-scrolled")
 
 	// With a narrow table the minimum width shrinks again.
-	openTable(w, key, a.Tables[key][1]) // customers
-	waitFor(t, w, func() bool { return a.Table.Data.fetched })
+	openTable(w, key, a.Tables[key][1], false) // customers
+	waitFor(t, w, func() bool { return a.table().Data.fetched })
 	w.TestRender(nil)
 	w.TestRender(nil)
-	if cw := a.Table.Data.gridSize.ContentW; cw == 0 || cw >= size.W {
+	if cw := a.table().Data.gridSize.ContentW; cw == 0 || cw >= size.W {
 		t.Fatalf("content width after a narrow table = %v", cw)
 	}
 }

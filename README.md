@@ -42,12 +42,14 @@ edit data safely: every change is previewed as SQL and saved in a single transac
 
 ### Browse
 
-- Sidebar with the tables and views of each database, with a text filter.
-- Three tabs per table:
+- Sidebar with the tables and views of each database, with a text filter and a refresh button per
+  connection and database.
+- **Tabs** for tables and SQL editors, from any connection. A click opens a table in a preview tab that the
+  next click replaces; a double click (or editing it) keeps it. Unsaved changes stay in their tab (marked `•`).
+- Two views per table:
   - **Structure**: columns with type, nullable, PK / auto-increment and foreign keys (`FK → table.column`).
   - **Data**: paginated grid (keyset or `OFFSET`), 20 to 500 rows per page, on-demand `COUNT(*)`, dimmed
     `NULL` and summarized BLOBs.
-  - **SQL**: an editor with syntax highlighting that runs against the table's database.
 - **Foreign key navigation**: foreign key cells have a link that opens the referenced table filtered to
   that row; the back button returns to where you were.
 
@@ -61,7 +63,7 @@ edit data safely: every change is previewed as SQL and saved in a single transac
   fails nothing is saved and the error names the change that failed.
 - Every `UPDATE` / `DELETE` must affect exactly one row, so tables without a primary key are safe too
   (you are warned before editing them).
-- Changing page, leaving the table, disconnecting or closing the window with unsaved changes asks first.
+- Changing page, closing the tab, disconnecting or closing the window with unsaved changes asks first.
 
 ### Create tables and databases
 
@@ -72,6 +74,8 @@ edit data safely: every change is previewed as SQL and saved in a single transac
 
 ### Run SQL
 
+- Open an **SQL tab** with the `<>` button at the end of the tab bar or **Ctrl+T**: it runs against the active
+  tab's database, with syntax highlighting.
 - **Ctrl+Enter** runs the selection or, without a selection, the statement under the cursor.
 - Several statements run in order in the same session; the last result is shown.
 - Runs in the background with a **Stop** button; results are paginated.
@@ -129,6 +133,10 @@ The `makefile` has the usual targets:
 
 | Where       | Shortcut                     | Action                                           |
 |-------------|------------------------------|--------------------------------------------------|
+| Anywhere    | **Ctrl+T**                   | Open an SQL tab on the active tab's database      |
+| Anywhere    | **Ctrl+W**                   | Close the active tab                             |
+| Anywhere    | **Ctrl+Tab** / **Ctrl+Shift+Tab** | Next / previous tab                         |
+| Sidebar     | **Double click** on a table  | Open it in a tab that stays                      |
 | SQL editor  | **Ctrl+Enter**               | Run the selection or the statement under the cursor |
 | Data grid   | **Click**                    | Select the row and edit the cell                 |
 | Data grid   | **Ctrl/Cmd+click**           | Add or remove a row from the selection           |
